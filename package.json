@@ -15,13 +15,13 @@
     "prepare": "lefthook install",
     "dev": "bun run src/index.ts",
     "build": "bun build ./src/index.ts --outdir ./dist --target bun",
-    "build:compile": "bun run scripts/build-compile.ts",
+    "build:compile": "bun build ./src/index.ts --compile --outfile ./dist/orchport",
     "test": "bun test test/",
     "test:unit": "bun test test/unit",
     "test:e2e": "bun test test/e2e",
-    "format": "oxfmt .",
-    "format:check": "oxfmt . --check",
-    "lint": "oxlint .",
+    "format": "bun oxfmt .",
+    "format:check": "bun oxfmt . --check",
+    "lint": "bun oxlint .",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -44,5 +44,6 @@
     "oxfmt": "0.48.0",
     "oxlint": "1.63.0",
     "typescript": "5.9.3"
-  }
+  },
+  "packageManager": "bun@1.3.13"
 }
