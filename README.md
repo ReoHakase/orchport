@@ -23,11 +23,23 @@
 | `orchport env`    | 解決結果のみ表示（JSON / テーブル / shell 向けなど）                                            |
 | `orchport list`   | 記録された run の一覧                                                                           |
 | `orchport kill`   | 記録に基づきプロセスへシグナル                                                                  |
-| `orchport doctor` | 状態ディレクトリと設定読み込みの簡易チェック                                                    |
+| `orchport doctor` | 状態ディレクトリの作成・読み書き試行と設定読み込みの簡易チェック                                |
 | `orchport init`   | 設定ファイルの雛形生成                                                                          |
 | `orchport switch` | `switchable` パスの向き先 worktree を更新（後述）                                               |
 
 パススイッチ: OAuth コールバックなど、ホストは共通のまま特定パスだけ別 worktree のバックエンドへ振り分けられます。
+
+## 状態ディレクトリとエージェントのサンドボックス
+
+run の記録やパススイッチの所有者など、共有状態は **`$XDG_STATE_HOME/orchport`** に保存します。`XDG_STATE_HOME` が未設定のときは XDG の既定どおり **`~/.local/state/orchport`** です。テストや特殊環境では **`ORCHPORT_STATE_DIR`** で上書きできます。解決されたパスと、状態ディレクトリへの **読み取り・書き込みが成功したこと** は **`orchport doctor`** の一行出力で確認できます。
+
+Cursor・Codex・Claude Code などのサンドボックスはワークスペース外への書き込みを許可していないことが多いので、orchport の状態ディレクトリへの読み書きが必要なときは、次のように **絶対パス**（例: macOS では `/Users/you/.local/state/orchport`）を追加してください。細部は各製品の最新ドキュメントを参照してください。
+
+| 環境            | 設定の置き場                                                                                                                           | 内容                                                                                                                                                                                                                                  |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Cursor**      | [`sandbox.json`](https://cursor.com/docs/reference/sandbox)（`~/.cursor/sandbox.json` またはリポジトリの `.cursor/sandbox.json`）      | `type` が `workspace_readwrite` のとき、**`additionalReadwritePaths`** に状態ディレクトリの絶対パスを追加する（ユーザー設定とリポジトリ設定はマージされる）。                                                                         |
+| **Codex**       | [`~/.codex/config.toml`](https://developers.openai.com/codex/config-reference)（信頼済みプロジェクトなら `.codex/config.toml`）        | `sandbox_mode = "workspace-write"` とし、**`sandbox_workspace_write.writable_roots`** に同じ絶対パスを追加する。CLI では **`--add-dir`** で追加できる場合がある。                                                                     |
+| **Claude Code** | [`settings.json`](https://code.claude.com/docs/en/configuration)（`~/.claude/settings.json` やプロジェクトの `.claude/settings.json`） | **`sandbox.filesystem.allowWrite`** に絶対パスを追加する（配列はスコープ間でマージされる）。組み込みファイルツールでそのパスを扱う場合は **`additionalDirectories`** も必要になることがある（状態はワークスペース外に置かれるため）。 |
 
 ## 使い方（概要）
 

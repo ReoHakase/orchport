@@ -1,16 +1,23 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-const DEFAULT_REL = join(".local", "state", "orchport");
+/**
+ * Resolves the XDG state home directory: `$XDG_STATE_HOME`, or if unset/empty the
+ * spec default `$HOME/.local/state`.
+ */
+const effectiveXdgStateHome = (): string => {
+  const xdg = process.env.XDG_STATE_HOME?.trim();
+  if (xdg) {
+    return xdg;
+  }
+  return join(homedir(), ".local", "state");
+};
 
+/** Shared orchport state lives under `$XDG_STATE_HOME/orchport` (see `effectiveXdgStateHome`). */
 export const getStateDir = (): string => {
   const override = process.env.ORCHPORT_STATE_DIR?.trim();
   if (override) {
     return override;
   }
-  const xdg = process.env.XDG_STATE_HOME?.trim();
-  if (xdg) {
-    return join(xdg, "orchport");
-  }
-  return join(homedir(), DEFAULT_REL);
+  return join(effectiveXdgStateHome(), "orchport");
 };

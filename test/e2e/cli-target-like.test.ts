@@ -132,5 +132,6 @@ describe("e2e target-like fixture", () => {
       env: { ORCHPORT_STATE_DIR: state },
     });
     expect(r.exitCode).toBe(0);
+    expect(r.stdout.toString()).toContain("read ok, write ok");
   });
 });
