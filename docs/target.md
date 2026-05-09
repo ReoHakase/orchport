@@ -75,7 +75,7 @@ worktree や agent ごとに **ベースドメインやポートをずらす**�
 | `TURSO_DATABASE_URL`       | libSQL / Turso（例では `db.*.localhost`）                       |
 | `PORT`                     | API の実 listen ポート                                          |
 
-**TLS / CA**: `packages/db` のスクリプト等では `NODE_EXTRA_CA_CERTS` を `~/.portless/ca.pem` にフォールバックする例がある。orchport 利用時も同様に、ローカル HTTPS の信頼が必要。
+**TLS / CA**: `packages/db` のスクリプト等では `NODE_EXTRA_CA_CERTS` を `~/.portless/ca.pem` にフォールバックする例がある。orchport の **`orchport run`**（プロキシが TLS のとき）は子プロセスに **`ORCHPORT_DEV_TLS_CERT_FILE`**（サーバ証明書 PEM のパス）を渡し、親で未設定なら **`NODE_EXTRA_CA_CERTS`**（Node/Bun）と **`DENO_CERT`**（Deno）も同じ PEM に設定する。`orchport env` だけでは PEM が無いのでこれらは出ない。社内 CA と併用する場合は既存の `NODE_EXTRA_CA_CERTS` / `DENO_CERT` は上書きされないため、手動マージが必要。
 
 ---
 

@@ -123,6 +123,85 @@ describe("e2e target-like fixture", () => {
     }
   );
 
+  test("run injects ORCHPORT_DEV_TLS_CERT_FILE and NODE_EXTRA_CA_CERTS for tls dev (ts)", async () => {
+    const fixture = fixtureDir("ts");
+    const state = await mkdtemp(join(tmpdir(), "orchport-e2e-"));
+    await mkdir(state, { recursive: true });
+    const r = runOrchport(
+      [
+        "run",
+        "--",
+        "sh",
+        "-c",
+        [
+          'test -f "$ORCHPORT_DEV_TLS_CERT_FILE"',
+          'case "$ORCHPORT_DEV_TLS_CERT_FILE" in *cert.pem) ;; *) exit 2 ;; esac',
+          'test "$ORCHPORT_DEV_TLS_CERT_FILE" = "$NODE_EXTRA_CA_CERTS"',
+          'test "$NODE_EXTRA_CA_CERTS" = "$DENO_CERT"',
+          "echo ok",
+        ].join(" && "),
+      ],
+      { cwd: fixture, env: { ORCHPORT_STATE_DIR: state } }
+    );
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout.toString().trim()).toBe("ok");
+  });
+
+  test("run does not override preset NODE_EXTRA_CA_CERTS or DENO_CERT (ts)", async () => {
+    const fixture = fixtureDir("ts");
+    const state = await mkdtemp(join(tmpdir(), "orchport-e2e-"));
+    await mkdir(state, { recursive: true });
+    const existingCa = join(state, "existing-ca.pem");
+    const existingDeno = join(state, "existing-deno.pem");
+    await Bun.write(existingCa, "dummy\n");
+    await Bun.write(existingDeno, "dummy\n");
+
+    const preset = {
+      ORCHPORT_STATE_DIR: state,
+      NODE_EXTRA_CA_CERTS: existingCa,
+      DENO_CERT: existingDeno,
+    };
+
+    const rNode = runOrchport(
+      ["run", "--", "printenv", "NODE_EXTRA_CA_CERTS"],
+      {
+        cwd: fixture,
+        env: preset,
+      }
+    );
+    expect(rNode.exitCode).toBe(0);
+    expect(rNode.stdout.toString().trim()).toBe(existingCa);
+
+    const rDeno = runOrchport(["run", "--", "printenv", "DENO_CERT"], {
+      cwd: fixture,
+      env: preset,
+    });
+    expect(rDeno.exitCode).toBe(0);
+    expect(rDeno.stdout.toString().trim()).toBe(existingDeno);
+
+    const rCert = runOrchport(
+      ["run", "--", "printenv", "ORCHPORT_DEV_TLS_CERT_FILE"],
+      { cwd: fixture, env: preset }
+    );
+    expect(rCert.exitCode).toBe(0);
+    const injected = rCert.stdout.toString().trim();
+    expect(injected).not.toBe(existingCa);
+    expect(injected).toContain("cert.pem");
+
+    const rOk = runOrchport(
+      [
+        "run",
+        "--",
+        "sh",
+        "-c",
+        'test -f "$ORCHPORT_DEV_TLS_CERT_FILE" && echo ok',
+      ],
+      { cwd: fixture, env: preset }
+    );
+    expect(rOk.exitCode).toBe(0);
+    expect(rOk.stdout.toString().trim()).toBe("ok");
+  });
+
   test("doctor exits 0", async () => {
     const fixture = fixtureDir("yaml");
     const state = await mkdtemp(join(tmpdir(), "orchport-e2e-"));

@@ -886,15 +886,16 @@ orchport/
 
 次は **Phase 1〜3 のコア**が実装済み。Phase 4（Tailscale 等）は未着手。
 
-| 領域                                     | 状態 | メモ                                                                                                                      |
-| ---------------------------------------- | ---- | ------------------------------------------------------------------------------------------------------------------------- |
-| Phase 1 `run` / `env` / `init`           | 済   | Gunshi。設定探索・YAML/JSON/TS・Valibot。`orchport run -- cmd` で `-` 付き argv を渡す。                                  |
-| ネスト pass-through                      | 済   | `ORCHPORT=1` を標準とし、互換で `orchport=1` も受け入れる。                                                               |
-| Phase 2 `list` / `kill` / `doctor`       | 済   | state は `ORCHPORT_STATE_DIR` または XDG。`doctor` は状態ディレクトリへプローブファイルで読み書き確認。zsh 補完は未実装。 |
-| Phase 3 ビルトイン `*.localhost` / proxy | 済   | 既定 URL はコード内規則。TS のみ任意 `url` 関数。`local-proxy` + `run` でリバースプロキシ（Bun）。                        |
-| 443 / sudo                               | 済   | `proxy.httpsPort` で追加 HTTP リスナを試行。`EACCES` / `EADDRINUSE` 等は warn のみで従来プロキシ継続（TLS なし）。        |
-| sandbox state フォールバック             | 済   | state 書き込み失敗時は記録スキップ + `ORCHPORT_VOLATILE_STATE=1` を子に渡す。                                             |
-| `bun build --compile`                    | 済   | `bun run build:compile` で単一バイナリ（`dist/orchport`）。既存 `build` はバンドルのみ。                                  |
+| 領域                                     | 状態 | メモ                                                                                                                                                                                                                                                        |
+| ---------------------------------------- | ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Phase 1 `run` / `env` / `init`           | 済   | Gunshi。設定探索・YAML/JSON/TS・Valibot。`orchport run -- cmd` で `-` 付き argv を渡す。                                                                                                                                                                    |
+| ネスト pass-through                      | 済   | `ORCHPORT=1` を標準とし、互換で `orchport=1` も受け入れる。                                                                                                                                                                                                 |
+| Phase 2 `list` / `kill` / `doctor`       | 済   | state は `ORCHPORT_STATE_DIR` または XDG。`doctor` は状態ディレクトリへプローブファイルで読み書き確認。zsh 補完は未実装。                                                                                                                                   |
+| Phase 3 ビルトイン `*.localhost` / proxy | 済   | 既定 URL はコード内規則。TS のみ任意 `url` 関数。`local-proxy` + `run` でリバースプロキシ（Bun）。                                                                                                                                                          |
+| 443 / sudo                               | 済   | `proxy.httpsPort` で追加 HTTP リスナを試行。`EACCES` / `EADDRINUSE` 等は warn のみで従来プロキシ継続（TLS なし）。                                                                                                                                          |
+| sandbox state フォールバック             | 済   | state 書き込み失敗時は記録スキップ + `ORCHPORT_VOLATILE_STATE=1` を子に渡す。                                                                                                                                                                               |
+| dev TLS → Node/Bun/Deno 信頼 PEM         | 済   | `run` でプロキシが TLS（`tls: dev` または PEM ファイル）のとき、子に `ORCHPORT_DEV_TLS_CERT_FILE` を注入。`NODE_EXTRA_CA_CERTS` / `DENO_CERT` は未設定時のみ同一 PEM パスを設定（既存値は上書きしない）。`orchport env` には出さない（実行時 PEM が無い）。 |
+| `bun build --compile`                    | 済   | `bun run build:compile` で単一バイナリ（`dist/orchport`）。既存 `build` はバンドルのみ。                                                                                                                                                                    |
 
 ---
 
