@@ -72,7 +72,6 @@ orchport list
 orchport kill
 orchport init
 orchport doctor
-orchport completion zsh
 ```
 
 `orchport up` は作らない。
@@ -103,98 +102,52 @@ http://localhost:<auto-port>
 
 # URL生成
 
-## デフォルト規則
+## ビルトイン規則（既定）
 
-MVPではproxyなしでも確実に動くよう、デフォルトURLはこれにする。
+`local-port` では実ポートで次を自動生成する（`worktreeHostPrefix` は origin デフォルトブランチ上では空）。
 
 ```txt
-http://localhost:<entry.port>
+http://<entry>.<worktreeHostPrefix><workspace>.localhost:<entry.port>
 ```
 
-例:
-
-```env
-orchport_WEB_URL=http://localhost:43101
-orchport_API_URL=http://localhost:43102
-orchport_AUTH_URL=http://localhost:43103
-```
-
-## 可読URL規則
-
-configでURLの生成規則を変えられるようにする。
-
-例:
+例（feature ブランチ）:
 
 ```txt
 http://web.feature-auth.acme.localhost:43101
-http://api.feature-auth.acme.localhost:43102
 ```
 
-または将来のproxy modeでは:
+`local-proxy` では同じホスト名で **プロキシ用ポート** を使う。
 
-```txt
-https://web.feature-auth.acme.localhost
-https://api.feature-auth.acme.localhost
-```
+## TypeScript のみ `url` 関数で上書き
 
-## TypeScript configでは関数を許す
-
-TypeScript configの場合のみ、URL生成関数を許す。
+任意。省略時は上記ビルトイン。
 
 ```ts
 import { defineConfig } from "orchport";
 
 export default defineConfig({
   workspace: "acme",
-
-  url: ({ entry, workspace, worktree }) => {
-    return `http://${entry.name}.${worktree}.${workspace}.localhost:${entry.port}`;
-  },
-
+  url: ({ entry, workspace, worktreeHostPrefix }) =>
+    `http://${entry.name}.${worktreeHostPrefix}${workspace}.localhost:${entry.port}`,
   entries: {
     web: { port: "auto" },
     api: { port: "auto" },
     auth: { port: "auto", priority: "auth" },
   },
-
   env: ({ entries }) => ({
-    orchport_WEB_PORT: entries.web.port,
-    orchport_API_PORT: entries.api.port,
-    orchport_AUTH_PORT: entries.auth.port,
-
-    orchport_WEB_URL: entries.web.url,
-    orchport_API_URL: entries.api.url,
-    orchport_AUTH_URL: entries.auth.url,
-
+    ORCHPORT_WEB_PORT: entries.web.port,
+    ORCHPORT_API_PORT: entries.api.port,
+    ORCHPORT_AUTH_PORT: entries.auth.port,
+    ORCHPORT_WEB_URL: entries.web.url,
+    ORCHPORT_API_URL: entries.api.url,
+    ORCHPORT_AUTH_URL: entries.auth.url,
     NEXT_PUBLIC_API_URL: entries.api.url,
     BETTER_AUTH_URL: entries.auth.url,
   }),
 });
 ```
 
-YAML/JSONでは関数を許さない。template文字列だけ。
-
-```yaml
-workspace: acme
-
-url:
-  template: "http://${entry.name}.${worktree}.${workspace}.localhost:${entry.port}"
-
-entries:
-  web:
-    port: auto
-  api:
-    port: auto
-  auth:
-    port: auto
-    priority: auth
-
-env:
-  orchport_WEB_PORT: ${entries.web.port}
-  orchport_WEB_URL: ${entries.web.url}
-  NEXT_PUBLIC_API_URL: ${entries.api.url}
-  BETTER_AUTH_URL: ${entries.auth.url}
-```
+YAML/JSON に `url` キーはない（文字列テンプレートは廃止）。
 
 ---
 
@@ -238,15 +191,15 @@ export default defineConfig({
     }),
   },
 
-  url: ({ entry, workspace, worktree }) =>
-    `http://${entry.name}.${worktree}.${workspace}.localhost:${entry.port}`,
+  url: ({ entry, workspace, worktreeHostPrefix }) =>
+    `http://${entry.name}.${worktreeHostPrefix}${workspace}.localhost:${entry.port}`,
 
   env: ({ entries }) => ({
-    orchport_WEB_PORT: entries.web.port,
-    orchport_WEB_URL: entries.web.url,
+    ORCHPORT_WEB_PORT: entries.web.port,
+    ORCHPORT_WEB_URL: entries.web.url,
 
-    orchport_API_PORT: entries.api.port,
-    orchport_API_URL: entries.api.url,
+    ORCHPORT_API_PORT: entries.api.port,
+    ORCHPORT_API_URL: entries.api.url,
 
     BETTER_AUTH_URL: entries.auth.url,
   }),
@@ -289,16 +242,13 @@ type DefineConfigInput<Entries extends Record<string, EntryConfig>> = {
 
   entries: Entries;
 
-  url?:
-    | {
-        template: string;
-      }
-    | ((ctx: {
-        entry: ResolvedEntry<Extract<keyof Entries, string>>;
-        workspace: string;
-        worktree: string;
-        mode: "local-port" | "local-proxy";
-      }) => string);
+  url?: (ctx: {
+    entry: ResolvedEntry<Extract<keyof Entries, string>>;
+    workspace: string;
+    worktree: string;
+    worktreeHostPrefix: string;
+    mode: "local-port" | "local-proxy";
+  }) => string;
 
   env?:
     | Record<string, string | number | boolean | null>
@@ -308,6 +258,7 @@ type DefineConfigInput<Entries extends Record<string, EntryConfig>> = {
         };
         workspace: string;
         worktree: string;
+        worktreeHostPrefix: string;
       }) => Record<string, string | number | boolean | null>);
 };
 ```
@@ -348,21 +299,18 @@ package.json の orchport field
 
 ## YAML/JSON config
 
-関数なし。templateのみ。
+`env` の値だけ `${entries.*}` 等の補間可。URL はビルトイン規則。
 
 ```json
 {
   "workspace": "acme",
-  "url": {
-    "template": "http://${entry.name}.${worktree}.${workspace}.localhost:${entry.port}"
-  },
   "entries": {
     "web": { "port": "auto" },
     "api": { "port": "auto" }
   },
   "env": {
-    "orchport_WEB_PORT": "${entries.web.port}",
-    "orchport_WEB_URL": "${entries.web.url}",
+    "ORCHPORT_WEB_PORT": "${entries.web.port}",
+    "ORCHPORT_WEB_URL": "${entries.web.url}",
     "NEXT_PUBLIC_API_URL": "${entries.api.url}"
   }
 }
@@ -377,25 +325,25 @@ orchportは標準envとuser-defined envを生成する。
 ## 標準env
 
 ```env
-orchport=1
-orchport_VERSION=0.1.0
-orchport_RUN_ID=01HX...
-orchport_WORKSPACE=acme
-orchport_WORKTREE=feature-auth
-orchport_MODE=local-port
-orchport_CONFIG=/path/to/orchport.config.ts
+ORCHPORT=1
+ORCHPORT_VERSION=0.1.0
+ORCHPORT_RUN_ID=01HX...
+ORCHPORT_WORKSPACE=acme
+ORCHPORT_WORKTREE=feature-auth
+ORCHPORT_MODE=local-port
+ORCHPORT_CONFIG=/path/to/orchport.config.ts
 ```
 
 entryごとに自動生成。
 
 ```env
-orchport_WEB_PORT=43101
-orchport_WEB_HOST=127.0.0.1
-orchport_WEB_URL=http://localhost:43101
+ORCHPORT_WEB_PORT=43101
+ORCHPORT_WEB_HOST=localhost
+ORCHPORT_WEB_URL=http://localhost:43101
 
-orchport_API_PORT=43102
-orchport_API_HOST=127.0.0.1
-orchport_API_URL=http://localhost:43102
+ORCHPORT_API_PORT=43102
+ORCHPORT_API_HOST=localhost
+ORCHPORT_API_URL=http://localhost:43102
 ```
 
 entry名は大文字snake caseに変換する。
@@ -423,7 +371,7 @@ env: ({ entries }) => ({
 おすすめはこれ。
 
 ```txt
-orchport_* は予約済みで上書き不可
+ORCHPORT_* は予約済みで上書き不可
 それ以外はuser-defined envが優先
 ```
 
@@ -646,9 +594,9 @@ turbo dev
 
 ---
 
-# nested orchport
+# nested ORCHPORT
 
-`orchport=1` がある場合、`orchport run` はデフォルトでpass-throughする。
+`ORCHPORT=1`（移行期間は互換で小文字 `orchport=1` も可）がある場合、`orchport run` はデフォルトでpass-throughする。
 
 例:
 
@@ -662,12 +610,12 @@ orchport run turbo dev
 ## 仕様
 
 ```txt
-orchport=1 のとき:
+ORCHPORT=1（または orchport=1）のとき:
 
 orchport run <command...>
   -> pass-through
 
-orchport env/list/kill/init/doctor/completion
+orchport env/list/kill/init/doctor
   -> 通常実行
 ```
 
@@ -686,9 +634,9 @@ orchport run --force-env <command...>
 外側のorchportは以下を注入する。
 
 ```env
-orchport=1
-orchport_RUN_ID=01HX...
-orchport_ROOT_PID=12345
+ORCHPORT=1
+ORCHPORT_RUN_ID=01HX...
+ORCHPORT_ROOT_PID=12345
 ```
 
 ---
@@ -720,7 +668,6 @@ interactiveにはしないが、見た目はmodernにする。
 --no-color対応
 NO_COLOR対応
 CI/non-TTY自動plain出力
-zsh autocomplete
 ```
 
 候補ライブラリ:
@@ -728,35 +675,15 @@ zsh autocomplete
 ```txt
 picocolors
 consola
-gunshi completion plugin
 ```
 
 ただし、依存を増やしすぎない。
 
 ---
 
-# zsh autocomplete
+# zsh autocomplete（未実装）
 
-```bash
-orchport completion zsh > ~/.zsh/completions/_orchport
-```
-
-補完対象:
-
-```txt
-commands:
-  run, env, list, kill, init, doctor, completion
-
-options:
-  --config, --workspace, --worktree, --json, --no-color, etc.
-
-dynamic:
-  entry names from config
-  run ids from state
-  ports from state
-```
-
-`zshrc` は勝手に編集しない。
+シェル補完は **後回し**（現行 CLI からは削除）。再導入時は Gunshi の completion 周りや静的 `_orchport` スクリプトを検討する。
 
 ---
 
@@ -784,8 +711,8 @@ funnelはpublic exposureなので --yes 必須にしてもよい
 将来のenv:
 
 ```env
-orchport_WEB_TAILSCALE_URL=https://machine.tailnet.ts.net:8443
-orchport_PUBLIC_URL=https://machine.tailnet.ts.net:8443
+ORCHPORT_WEB_TAILSCALE_URL=https://machine.tailnet.ts.net:8443
+ORCHPORT_PUBLIC_URL=https://machine.tailnet.ts.net:8443
 ```
 
 初期実装では、オプションを予約してもよい。
@@ -830,13 +757,13 @@ sudo要求はしない
 
 orchportはTurborepoを知らなくてよい。
 
-Turborepo側では、必要なら `orchport_*` をpass-throughする。
+Turborepo側では、必要なら `ORCHPORT_*` をpass-throughする。
 
 ```json
 {
   "$schema": "https://turborepo.com/schema.json",
   "globalPassThroughEnv": [
-    "orchport_*",
+    "ORCHPORT_*",
     "NEXT_PUBLIC_API_URL",
     "BETTER_AUTH_URL",
     "OAUTH_CALLBACK_URL"
@@ -874,7 +801,7 @@ app:
 ```json
 {
   "scripts": {
-    "dev": "next dev --hostname 127.0.0.1 --port $orchport_WEB_PORT"
+    "dev": "next dev --hostname 127.0.0.1 --port $ORCHPORT_WEB_PORT"
   }
 }
 ```
@@ -884,7 +811,7 @@ Vite:
 ```json
 {
   "scripts": {
-    "dev": "vite --host 127.0.0.1 --port $orchport_WEB_PORT --strictPort"
+    "dev": "vite --host 127.0.0.1 --port $ORCHPORT_WEB_PORT --strictPort"
   }
 }
 ```
@@ -892,7 +819,7 @@ Vite:
 Bun API:
 
 ```ts
-const port = Number(process.env.orchport_API_PORT ?? process.env.PORT ?? 3000);
+const port = Number(process.env.ORCHPORT_API_PORT ?? process.env.PORT ?? 3000);
 
 Bun.serve({
   hostname: "127.0.0.1",
@@ -908,7 +835,7 @@ Bun.serve({
 ```txt
 orchport/
   src/
-    cli.ts
+    index.ts
     commands/
       run.ts
       env.ts
@@ -916,7 +843,6 @@ orchport/
       kill.ts
       init.ts
       doctor.ts
-      completion.ts
     config/
       define-config.ts
       entry.ts
@@ -956,6 +882,22 @@ orchport/
 
 ---
 
+# 実装ステータス（このリポジトリ）
+
+次は **Phase 1〜3 のコア**が実装済み。Phase 4（Tailscale 等）は未着手。
+
+| 領域                                     | 状態 | メモ                                                                                                               |
+| ---------------------------------------- | ---- | ------------------------------------------------------------------------------------------------------------------ |
+| Phase 1 `run` / `env` / `init`           | 済   | Gunshi。設定探索・YAML/JSON/TS・Valibot。`orchport run -- cmd` で `-` 付き argv を渡す。                           |
+| ネスト pass-through                      | 済   | `ORCHPORT=1` を標準とし、互換で `orchport=1` も受け入れる。                                                        |
+| Phase 2 `list` / `kill` / `doctor`       | 済   | state は `ORCHPORT_STATE_DIR` または XDG。zsh 補完は未実装。                                                       |
+| Phase 3 ビルトイン `*.localhost` / proxy | 済   | 既定 URL はコード内規則。TS のみ任意 `url` 関数。`local-proxy` + `run` でリバースプロキシ（Bun）。                 |
+| 443 / sudo                               | 済   | `proxy.httpsPort` で追加 HTTP リスナを試行。`EACCES` / `EADDRINUSE` 等は warn のみで従来プロキシ継続（TLS なし）。 |
+| sandbox state フォールバック             | 済   | state 書き込み失敗時は記録スキップ + `ORCHPORT_VOLATILE_STATE=1` を子に渡す。                                      |
+| `bun build --compile`                    | 済   | `bun run build:compile` で単一バイナリ（`dist/orchport`）。既存 `build` はバンドルのみ。                           |
+
+---
+
 # 実装フェーズ
 
 ## Phase 1 MVP
@@ -969,7 +911,7 @@ Valibot validation
 typed defineConfig / entry
 stable port allocation
 env generation
-nested orchport=1 pass-through
+nested ORCHPORT=1 pass-through
 bun build --compile
 ```
 
@@ -980,16 +922,16 @@ orchport list
 orchport kill
 state管理
 stale cleanup
-zsh completion
 modern output
 doctor
+(zsh completion は後回し)
 ```
 
 ## Phase 3 URL拡張
 
 ```txt
-configurable URL rules
-*.localhost URL template
+built-in *.localhost hostnames
+optional TS url() override
 optional local proxy
 443 best-effort
 sandbox fallback
