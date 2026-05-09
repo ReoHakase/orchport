@@ -1,0 +1,39 @@
+{
+  "name": "orchport",
+  "version": "0.1.0",
+  "description": "A CLI built with Bunli",
+  "author": "",
+  "bin": {
+    "orchport": "./dist/index.js"
+  },
+  "type": "module",
+  "scripts": {
+    "prepare": "lefthook install",
+    "postinstall": "bunli generate",
+    "dev": "bun run src/index.ts",
+    "build": "bunli build",
+    "test": "bun test",
+    "format": "oxfmt .",
+    "lint": "oxlint .",
+    "typecheck": "tsgo --noEmit"
+  },
+  "dependencies": {
+    "@bunli/core": "latest"
+  },
+  "devDependencies": {
+    "@bunli/test": "latest",
+    "@commitlint/config-conventional": "^21.0.0",
+    "@tsconfig/bun": "1.0.10",
+    "@types/bun": "latest",
+    "bunli": "latest",
+    "commitlint": "^21.0.0",
+    "lefthook": "^2.1.6",
+    "oxfmt": "^0.48.0",
+    "oxlint": "^1.63.0",
+    "typescript": "^5.0.0"
+  },
+  "bunli": {
+    "entry": "./src/index.ts",
+    "outDir": "./dist"
+  }
+}
