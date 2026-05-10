@@ -44,8 +44,9 @@ export const globalOptionsPlugin = plugin({
       description: "Only log warnings and errors",
       default: false,
     });
-    ctx.addGlobalOption("no-color", {
+    ctx.addGlobalOption("noColor", {
       type: "boolean",
+      toKebab: true,
       description: "Disable ANSI colors in log output",
       default: false,
     });

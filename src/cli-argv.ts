@@ -46,6 +46,9 @@ const mergeGlobalStringOptionsInPrefix = (prefix: string[]): string[] => {
   return out;
 };
 
+const normalizeGlobalShortOptionsInPrefix = (prefix: string[]): string[] =>
+  prefix.map((a) => (a === "-v" ? "--verbose" : a));
+
 const firstSubcommandIndex = (head: string[]): number => {
   for (let i = 0; i < head.length; i++) {
     const a = head[i];
@@ -73,9 +76,14 @@ export const normalizeGlobalOptionArgv = (argv: string[]): string[] => {
 
   const subIdx = firstSubcommandIndex(head);
   if (subIdx === -1) {
-    return [...mergeGlobalStringOptionsInPrefix(head), ...tail];
+    return [
+      ...mergeGlobalStringOptionsInPrefix(
+        normalizeGlobalShortOptionsInPrefix(head)
+      ),
+      ...tail,
+    ];
   }
-  const prefix = head.slice(0, subIdx);
+  const prefix = normalizeGlobalShortOptionsInPrefix(head.slice(0, subIdx));
   const afterSub = head.slice(subIdx);
   return [...mergeGlobalStringOptionsInPrefix(prefix), ...afterSub, ...tail];
 };

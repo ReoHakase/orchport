@@ -37,6 +37,7 @@ export const killCommand = define({
     },
     all: {
       type: "boolean",
+      description: "Signal every recorded running root process",
       default: false,
     },
     stale: {
@@ -44,10 +45,22 @@ export const killCommand = define({
       description: "Remove state files for dead runs",
       default: false,
     },
-    runId: { type: "string" },
+    runId: {
+      type: "string",
+      toKebab: true,
+      description: "Signal the run with this exact run id",
+    },
     pid: { type: "string", description: "Process id to signal" },
-    force: { type: "boolean", default: false },
-    signal: { type: "string", default: "SIGTERM" },
+    force: {
+      type: "boolean",
+      description: "Allow killing a process that was not recorded by orchport",
+      default: false,
+    },
+    signal: {
+      type: "string",
+      description: "Signal to send (SIGTERM, SIGKILL, SIGINT, or SIGHUP)",
+      default: "SIGTERM",
+    },
   },
   run: async (ctx) => {
     const values = ctx.values;

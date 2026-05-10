@@ -77,7 +77,7 @@ worktree や agent ごとに **ベースドメインやポートをずらす**�
 | `TURSO_DATABASE_URL`       | libSQL / Turso（例では `db.*.localhost`）                       |
 | `PORT`                     | API の実 listen ポート                                          |
 
-**TLS / CA**: `packages/db` のスクリプト等では `NODE_EXTRA_CA_CERTS` を `~/.portless/ca.pem` にフォールバックする例がある。orchport の **`orchport run`**（プロキシが TLS のとき）は子プロセスに **`ORCHPORT_DEV_TLS_CERT_FILE`**（サーバ証明書 PEM のパス）を渡し、親で未設定なら **`NODE_EXTRA_CA_CERTS`**（Node/Bun）と **`DENO_CERT`**（Deno）も同じ PEM に設定する。`orchport env` だけでは PEM が無いのでこれらは出ない。社内 CA と併用する場合は既存の `NODE_EXTRA_CA_CERTS` / `DENO_CERT` は上書きされないため、手動マージが必要。追加の標準 HTTPS ポートがバインドできず **`ORCHPORT_*_URL`** がメイン TLS ポートに書き換わるとき、`env` で **`${entries.*.url}` と同一文字列だった値**（例: `TURSO_DATABASE_URL`）も **`run` が同じ新しい URL に追従**する（カスタム `url` 関数は対象外）。
+**TLS / CA**: `packages/db` のスクリプト等では `NODE_EXTRA_CA_CERTS` を `~/.portless/ca.pem` にフォールバックする例がある。orchport の **`orchport run`**（プロキシが TLS のとき）は子プロセスに **`ORCHPORT_DEV_TLS_CERT_FILE`**（サーバ証明書 PEM のパス）を渡し、親で未設定なら **`NODE_EXTRA_CA_CERTS`**（Node/Bun）と **`DENO_CERT`**（Deno）も同じ PEM に設定する。`orchport env` だけでは PEM が無いのでこれらは出ない。社内 CA と併用する場合は既存の `NODE_EXTRA_CA_CERTS` / `DENO_CERT` は上書きされないため、手動マージが必要。追加の標準 HTTPS ポートがバインドできず **`ORCHPORT_*_URL`** がメイン TLS ポートに書き換わるとき、`env` で **`${proxies.*.url}` や `${db.url}` と同一文字列だった値**（例: `TURSO_DATABASE_URL`）も **`run` が同じ新しい URL に追従**する（カスタム `url` 関数は対象外）。
 
 ---
 

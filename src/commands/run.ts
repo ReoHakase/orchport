@@ -89,6 +89,7 @@ export const runCommand = define({
     },
     forceEnv: {
       type: "boolean",
+      toKebab: true,
       description: "Force full env resolution even when ORCHPORT=1",
       default: false,
     },

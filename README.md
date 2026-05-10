@@ -61,7 +61,12 @@ orchport run -- turbo dev
 | `--sld <name>`      | ホスト名のラベル（例: `*.myapp.localhost` の `myapp`）を上書き                           |
 | `--tld <suffix>`    | 公開サフィックスを上書き。`localhost` や `.test` など。先頭の `.` は有無どちらでも正規化 |
 | `--worktree <name>` | worktree 名を上書き                                                                      |
+| `--version`         | バージョンを表示                                                                         |
+| `--verbose`, `-v`   | `orchport.*` ロガーを trace まで出す                                                     |
+| `--quiet`, `-q`     | warning / error のみに抑える                                                             |
+| `--no-color`        | ANSI 色を無効化                                                                          |
 | `--force-switch`    | `orchport run` のみ。パススイッチのスロットが他 worktree のものでも奪って続行            |
+| `--json`            | 致命的エラーを stderr に JSON で出す                                                     |
 
 > [!TIP]
 > 子コマンドが `-` で始まる引数を取る場合は `orchport run -- cmd ...` のように `--` で区切ってください。

@@ -127,23 +127,17 @@ http://web.feature-auth.acme.localhost:43101
 import { defineConfig } from "orchport";
 
 export default defineConfig({
-  workspace: "acme",
-  url: ({ entry, workspace, worktreeHostPrefix }) =>
-    `http://${entry.name}.${worktreeHostPrefix}${workspace}.localhost:${entry.port}`,
-  entries: {
-    web: { port: "auto" },
-    api: { port: "auto" },
-    auth: { port: "auto", priority: "auth" },
+  sld: "acme",
+  url: ({ proxy, sld, worktreeHostPrefix, tld }) =>
+    `http://${proxy.name}.${worktreeHostPrefix}${sld}${tld}:${proxy.port}`,
+  proxies: {
+    web: true,
+    api: true,
+    auth: true,
   },
-  env: ({ entries }) => ({
-    ORCHPORT_WEB_PORT: entries.web.port,
-    ORCHPORT_API_PORT: entries.api.port,
-    ORCHPORT_AUTH_PORT: entries.auth.port,
-    ORCHPORT_WEB_URL: entries.web.url,
-    ORCHPORT_API_URL: entries.api.url,
-    ORCHPORT_AUTH_URL: entries.auth.url,
-    NEXT_PUBLIC_API_URL: entries.api.url,
-    BETTER_AUTH_URL: entries.auth.url,
+  env: ({ proxies }) => ({
+    NEXT_PUBLIC_API_URL: proxies.api.url,
+    BETTER_AUTH_URL: proxies.auth.url,
   }),
 });
 ```
@@ -159,77 +153,49 @@ TypeScript configは、型補完を強くする。
 ## 目標
 
 ```txt
-entry名から entries.web.url / entries.api.port を型推論する
-env関数内で存在しないentry名を型エラーにする
-priorityなどはliteral unionで補完する
-url関数の引数にentry/workspace/worktree/exposure modeを型付きで渡す
+proxy名から proxies.web.url / proxies.api.port を型推論する
+env関数内で存在しないproxy名を型エラーにする
+range / strategy / strict / switchables などを型補完する
+url関数の引数にproxy/sld/tld/worktree/exposure modeを型付きで渡す
 defineConfigで余計なキーを検出しやすくする
 ```
 
 ## API案
 
 ```ts
-import { defineConfig, entry } from "orchport";
+import { defineConfig } from "orchport";
 
 export default defineConfig({
-  workspace: "acme",
+  sld: "acme",
 
-  entries: {
-    web: entry({
-      port: "auto",
-      role: ["web"],
-    }),
-
-    api: entry({
-      port: "auto",
-      role: ["api"],
-    }),
-
-    auth: entry({
-      port: "auto",
-      role: ["auth"],
-      priority: "auth",
-    }),
+  proxies: {
+    web: true,
+    api: { range: [8000, 8999], strategy: "larger" },
+    auth: { switchables: ["/auth/callback/*"] },
   },
 
-  url: ({ entry, workspace, worktreeHostPrefix }) =>
-    `http://${entry.name}.${worktreeHostPrefix}${workspace}.localhost:${entry.port}`,
+  url: ({ proxy, sld, worktreeHostPrefix, tld }) =>
+    `http://${proxy.name}.${worktreeHostPrefix}${sld}${tld}:${proxy.port}`,
 
-  env: ({ entries }) => ({
-    ORCHPORT_WEB_PORT: entries.web.port,
-    ORCHPORT_WEB_URL: entries.web.url,
-
-    ORCHPORT_API_PORT: entries.api.port,
-    ORCHPORT_API_URL: entries.api.url,
-
-    BETTER_AUTH_URL: entries.auth.url,
+  env: ({ proxies }) => ({
+    NEXT_PUBLIC_API_URL: proxies.api.url,
+    BETTER_AUTH_URL: proxies.auth.url,
   }),
 });
 ```
 
-`entry()` は必須ではないが、型補完を強くするために提供する。
-
-```ts
-web: {
-  port: "auto",
-}
-```
-
-でも動くようにする。
-
 ## 型イメージ
 
 ```ts
-type EntryConfig = {
-  port?: "auto" | number;
-  host?: string;
-  protocol?: "http" | "https";
-  subdomain?: string;
-  priority?: "default" | "auth";
-  role?: readonly ("web" | "api" | "auth" | "storybook" | "custom")[];
+type ProxyConfig = {
+  range?: "auto" | readonly [number, number];
+  strategy?: "deterministic" | "smaller" | "larger";
+  strict?: boolean;
+  switchables?: readonly string[];
+  env?: Record<string, string | number | boolean | null>;
 };
 
-type ResolvedEntry<Name extends string = string> = {
+type ResolvedProxy<Name extends string = string> = {
   name: Name;
   port: number;
   host: string;
@@ -237,15 +203,16 @@ type ResolvedEntry<Name extends string = string> = {
   localUrl: string;
 };
 
-type DefineConfigInput<Entries extends Record<string, EntryConfig>> = {
-  workspace?: string;
+type DefineConfigInput<Proxies extends Record<string, true | ProxyConfig>> = {
+  sld?: string;
   worktree?: string;
 
-  entries: Entries;
+  proxies: Proxies;
 
   url?: (ctx: {
-    entry: ResolvedEntry<Extract<keyof Entries, string>>;
-    workspace: string;
+    proxy: ResolvedProxy<Extract<keyof Proxies, string>>;
+    sld: string;
+    tld: string;
     worktree: string;
     worktreeHostPrefix: string;
     mode: "local-port" | "local-proxy";
@@ -254,17 +221,17 @@ type DefineConfigInput<Entries extends Record<string, EntryConfig>> = {
   env?:
     | Record<string, string | number | boolean | null>
     | ((ctx: {
-        entries: {
-          [K in keyof Entries]: ResolvedEntry<Extract<K, string>>;
+        proxies: {
+          [K in keyof Proxies]: ResolvedProxy<Extract<K, string>>;
         };
-        workspace: string;
+        sld: string;
         worktree: string;
         worktreeHostPrefix: string;
       }) => Record<string, string | number | boolean | null>);
 };
 ```
 
-これにより、TypeScript configでは `entries.web.url` が補完される。
+これにより、TypeScript configでは `proxies.web.url` が補完される。
 
 ---
 
@@ -300,19 +267,18 @@ package.json の orchport field
 
 ## YAML/JSON config
 
-`env` の値だけ `${entries.*}` 等の補間可。URL はビルトイン規則。
+`env` の値だけ `${proxies.*}` または `${web.url}` のような proxy 名 shorthand で補間可。URL はビルトイン規則。
 
 ```json
 {
-  "workspace": "acme",
-  "entries": {
-    "web": { "port": "auto" },
-    "api": { "port": "auto" }
+  "sld": "acme",
+  "proxies": {
+    "web": true,
+    "api": { "range": [8000, 8999] }
   },
   "env": {
-    "ORCHPORT_WEB_PORT": "${entries.web.port}",
-    "ORCHPORT_WEB_URL": "${entries.web.url}",
-    "NEXT_PUBLIC_API_URL": "${entries.api.url}"
+    "APP_BASE_URL": "${web.url}",
+    "NEXT_PUBLIC_API_URL": "${proxies.api.url}"
   }
 }
 ```
@@ -360,16 +326,12 @@ admin-api -> ADMIN_API
 configの `env` で追加する。
 
 ```ts
-env: ({ entries }) => ({
-  NEXT_PUBLIC_API_URL: entries.api.url,
-  BETTER_AUTH_URL: entries.auth.url,
-  OAUTH_CALLBACK_URL: `${entries.auth.url}/api/auth/callback/google`,
+env: ({ proxies }) => ({
+  NEXT_PUBLIC_API_URL: proxies.api.url,
+  BETTER_AUTH_URL: proxies.auth.url,
+  OAUTH_CALLBACK_URL: `${proxies.auth.url}/api/auth/callback/google`,
 });
 ```
-
-衝突時はuser-defined envが標準envを上書きできるかを決める必要がある。
-
-おすすめはこれ。
 
 ```txt
 ORCHPORT_* は予約済みで上書き不可
@@ -451,7 +413,7 @@ run state例。
   "worktree": "feature-auth",
   "mode": "local-port",
   "createdAt": "2026-05-09T13:00:00.000Z",
-  "entries": {
+  "proxies": {
     "web": {
       "port": 43101,
       "url": "http://localhost:43101"
@@ -472,7 +434,7 @@ run state例。
 orchport list
 orchport list --json
 orchport list --stale
-orchport list --workspace acme
+orchport list --sld acme
 orchport list --worktree feature-auth
 ```
 
@@ -541,7 +503,6 @@ orchport init
 orchport init --format ts
 orchport init --format yaml
 orchport init --format json
-orchport init --yes
 ```
 
 非interactiveなので、質問はしない。
@@ -554,24 +515,26 @@ orchport init --format ts --force
 生成例。
 
 ```ts
-import { defineConfig, entry } from "orchport";
+import { defineConfig } from "orchport";
 
 export default defineConfig({
-  workspace: "my-app",
-
-  entries: {
-    web: entry({ port: "auto" }),
-    api: entry({ port: "auto" }),
-    auth: entry({ port: "auto", priority: "auth" }),
+  sld: "my-app",
+  mode: "local-proxy",
+  proxy: {
+    tls: "dev",
+    httpsPort: false,
   },
-
-  url: ({ entry }) => `http://localhost:${entry.port}`,
-
-  env: ({ entries }) => ({
-    NEXT_PUBLIC_API_URL: entries.api.url,
-    BETTER_AUTH_URL: entries.auth.url,
-    OAUTH_CALLBACK_URL: `${entries.auth.url}/api/auth/callback/google`,
-  }),
+  proxies: {
+    web: true,
+    api: {
+      switchables: ["/auth/callback/*"],
+    },
+  },
+  env: {
+    APP_BASE_URL: "${web.url}",
+    NEXT_PUBLIC_API_BASE_URL: "${api.url}",
+    API_PUBLIC_URL: "${api.url}",
+  },
 });
 ```
 

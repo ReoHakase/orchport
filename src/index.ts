@@ -20,6 +20,11 @@ const log = getLogger(["orchport", "cli"]);
 
 const main = async (): Promise<void> => {
   const argv = process.argv.slice(2);
+  if (argv.some((a) => a === "--version")) {
+    process.stdout.write(`${packageVersion()}\n`);
+    return;
+  }
+
   const logFlags = peekLogFlags(argv);
   const jsonErrors = peekGlobalJsonErrorsFlag(argv);
   await setupLogging(logFlags);

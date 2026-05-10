@@ -64,6 +64,7 @@ export const listCommand = define({
   args: {
     json: {
       type: "boolean",
+      description: "Print recorded runs as JSON",
       default: false,
     },
     stale: {
@@ -75,7 +76,10 @@ export const listCommand = define({
       type: "string",
       description: "Filter runs by SLD (ORCHPORT_SLD / stored workspace label)",
     },
-    worktree: { type: "string" },
+    worktree: {
+      type: "string",
+      description: "Filter runs by worktree slug",
+    },
   },
   run: async (ctx) => {
     log.debug("list: loading run states");

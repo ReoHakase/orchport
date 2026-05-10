@@ -83,4 +83,11 @@ describe("normalizeGlobalOptionArgv", () => {
       "env",
     ]);
   });
+
+  test("normalizes global -v to --verbose before Gunshi sees built-in version", () => {
+    expect(normalizeGlobalOptionArgv(["-v", "env"])).toEqual([
+      "--verbose",
+      "env",
+    ]);
+  });
 });

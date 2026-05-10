@@ -11,68 +11,92 @@ import { pickBoolean, pickString } from "../utils/pick.ts";
 const log = getLogger(["orchport", "init"]);
 
 const yamlTemplate = `sld: my-app
-worktree: main
-mode: local-port
+mode: local-proxy
+
+proxy:
+  tls: dev
+  httpsPort: false
 
 proxies:
   web: true
-  api: true
+  api:
+    switchables:
+      - "/auth/callback/*"
 
 env:
-  ORCHPORT_WEB_PORT: "\${proxies.web.port}"
-  ORCHPORT_API_PORT: "\${proxies.api.port}"
-  ORCHPORT_WEB_URL: "\${proxies.web.url}"
-  ORCHPORT_API_URL: "\${proxies.api.url}"
-  NEXT_PUBLIC_API_BASE_URL: "\${proxies.api.url}"
+  APP_BASE_URL: "\${web.url}"
+  NEXT_PUBLIC_API_BASE_URL: "\${api.url}"
+  API_PUBLIC_URL: "\${api.url}"
 `;
 
 const tsTemplate = `import { defineConfig } from "orchport";
 
 export default defineConfig({
   sld: "my-app",
-  mode: "local-port",
+  mode: "local-proxy",
+  proxy: {
+    tls: "dev",
+    httpsPort: false,
+  },
   proxies: {
     web: true,
-    api: {},
+    api: {
+      switchables: ["/auth/callback/*"],
+    },
   },
-  env: ({ proxies }) => ({
-    ORCHPORT_WEB_PORT: String(proxies.web.port),
-    ORCHPORT_API_PORT: String(proxies.api.port),
-    ORCHPORT_WEB_URL: proxies.web.url,
-    ORCHPORT_API_URL: proxies.api.url,
-    NEXT_PUBLIC_API_BASE_URL: proxies.api.url,
-  }),
+  env: {
+    APP_BASE_URL: "\${web.url}",
+    NEXT_PUBLIC_API_BASE_URL: "\${api.url}",
+    API_PUBLIC_URL: "\${api.url}",
+  },
 });
 `;
 
 const jsonTemplate = `{
   "sld": "my-app",
-  "worktree": "main",
-  "mode": "local-port",
+  "mode": "local-proxy",
+  "proxy": {
+    "tls": "dev",
+    "httpsPort": false
+  },
   "proxies": {
     "web": true,
-    "api": true
+    "api": {
+      "switchables": ["/auth/callback/*"]
+    }
   },
   "env": {
-    "ORCHPORT_WEB_PORT": "\${proxies.web.port}",
-    "ORCHPORT_API_PORT": "\${proxies.api.port}",
-    "ORCHPORT_WEB_URL": "\${proxies.web.url}",
-    "ORCHPORT_API_URL": "\${proxies.api.url}",
-    "NEXT_PUBLIC_API_BASE_URL": "\${proxies.api.url}"
+    "APP_BASE_URL": "\${web.url}",
+    "NEXT_PUBLIC_API_BASE_URL": "\${api.url}",
+    "API_PUBLIC_URL": "\${api.url}"
   }
 }
 `;
 
-/** Writes `orchport.yaml` / `orchport.json` / `orchport.config.ts` starter with sample `ORCHPORT_*` env keys. */
+/** Writes `orchport.yaml` / `orchport.json` / `orchport.config.ts` starter config. */
 export const initCommand = define({
   name: "init",
   description: "Create an orchport config file in the current directory",
+  examples: `
+# Default YAML: writes orchport.yaml
+orchport init
+
+# JSON: writes orchport.json
+orchport init --format json
+
+# TypeScript: writes orchport.config.ts
+orchport init --format ts
+
+# Replace an existing config
+orchport init --format ts --force
+  `.trim(),
   args: {
     format: {
       type: "enum",
       choices: ["ts", "yaml", "json"] as const,
       default: "yaml",
-      description: "Config format",
+      description:
+        "Config format to write: yaml -> orchport.yaml, json -> orchport.json, ts -> orchport.config.ts",
     },
     force: {
       type: "boolean",
