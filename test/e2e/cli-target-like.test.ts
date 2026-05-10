@@ -9,18 +9,36 @@ import {
 } from "../../src/utils/git.ts";
 import { isRecord } from "../../src/utils/pick.ts";
 
-const parseEnvJson = (text: string): Record<string, string> => {
+const parseNestedEnvJson = (
+  text: string
+): {
+  global: Record<string, string>;
+  proxies: Record<string, Record<string, string>>;
+} => {
   const raw: unknown = JSON.parse(text);
-  if (!isRecord(raw)) {
-    throw new Error("env --json must be an object");
+  if (!isRecord(raw) || !isRecord(raw.global) || !isRecord(raw.proxies)) {
+    throw new Error("env --json must return nested global/proxies objects");
   }
-  const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(raw)) {
+  const global: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw.global)) {
     if (typeof v === "string") {
-      out[k] = v;
+      global[k] = v;
     }
   }
-  return out;
+  const proxies: Record<string, Record<string, string>> = {};
+  for (const [name, value] of Object.entries(raw.proxies)) {
+    if (!isRecord(value)) {
+      continue;
+    }
+    const env: Record<string, string> = {};
+    for (const [k, v] of Object.entries(value)) {
+      if (typeof v === "string") {
+        env[k] = v;
+      }
+    }
+    proxies[name] = env;
+  }
+  return { global, proxies };
 };
 
 const repoRoot = join(import.meta.dir, "..", "..");
@@ -58,22 +76,32 @@ describe("e2e target-like fixture", () => {
       });
       expect(r.exitCode).toBe(0);
       const text = r.stdout.toString().trim();
-      const envJson = parseEnvJson(text);
-      expect(envJson.ORCHPORT_SLD).toBe(envJson.ORCHPORT_WORKSPACE);
-      expect(envJson.ORCHPORT_TLD).toBe(".test");
+      const envJson = parseNestedEnvJson(text);
+      expect(envJson.global.ORCHPORT_SLD).toBe(
+        envJson.global.ORCHPORT_WORKSPACE
+      );
+      expect(envJson.global.ORCHPORT_TLD).toBe(".test");
       const ws = "myapp";
       const wt = detectWorktreeName(fixture);
       const pref = resolveWorktreeHostPrefix(wt, fixture);
-      expect(envJson.ORCHPORT_WORKSPACE).toBe(ws);
-      expect(envJson.ORCHPORT_WORKTREE).toBe(wt);
-      expect(envJson.ORCHPORT_MODE).toBe("local-proxy");
-      expect(envJson.ORCHPORT_PROXY_PORT).toBeDefined();
-      expect(envJson.ORCHPORT_HTTPS_PROXY_PORT).toBe("443");
+      expect(envJson.global.ORCHPORT_WORKSPACE).toBe(ws);
+      expect(envJson.global.ORCHPORT_WORKTREE).toBe(wt);
+      expect(envJson.global.ORCHPORT_MODE).toBe("local-proxy");
+      expect(envJson.global.ORCHPORT_PROXY_PORT).toBeDefined();
+      expect(envJson.global.ORCHPORT_HTTPS_PROXY_PORT).toBe("443");
       const hostWeb = `web.${pref}${ws}.test`;
       const hostApi = `api.${pref}${ws}.test`;
-      expect(envJson.ORCHPORT_WEB_URL).toBe(`https://${hostWeb}`);
-      expect(envJson.NEXT_PUBLIC_API_BASE_URL).toBe(`https://${hostApi}`);
-      expect(envJson.BETTER_AUTH_URL).toBe(envJson.API_PUBLIC_URL);
+      expect(envJson.proxies.web?.ORCHPORT_WEB_URL).toBe(`https://${hostWeb}`);
+      expect(envJson.proxies.api?.ORCHPORT_API_URL).toBe(`https://${hostApi}`);
+      expect(envJson.proxies.web?.PORT).toBeDefined();
+      expect(envJson.proxies.api?.PORT).toBeDefined();
+      expect(envJson.global.PORT).toBeUndefined();
+      expect(envJson.global.NEXT_PUBLIC_API_BASE_URL).toBe(
+        `https://${hostApi}`
+      );
+      expect(envJson.global.BETTER_AUTH_URL).toBe(
+        envJson.global.API_PUBLIC_URL
+      );
     }
   );
 
@@ -223,5 +251,21 @@ describe("e2e target-like fixture", () => {
     });
     expect(r.exitCode).toBe(0);
     expect(r.stdout.toString()).toContain("read/write ok");
+  });
+
+  test("switch human output shows target and unresolved route", async () => {
+    const fixture = fixtureDir("ts");
+    const state = await mkdtemp(join(tmpdir(), "orchport-e2e-"));
+    await mkdir(state, { recursive: true });
+    const r = runOrchport(["switch", "feature-auth"], {
+      cwd: fixture,
+      env: { ORCHPORT_STATE_DIR: state },
+    });
+    expect(r.exitCode).toBe(0);
+    const out = r.stdout.toString();
+    expect(out).toContain("switch updated 1 route");
+    expect(out).toContain("target feature-auth");
+    expect(out).toContain("unresolved");
+    expect(out).toContain("requests return 502");
   });
 });

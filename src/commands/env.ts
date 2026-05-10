@@ -3,10 +3,16 @@ import { randomBytes } from "node:crypto";
 import { getLogger } from "@logtape/logtape";
 import { define } from "gunshi";
 
+import { cliUseColor } from "../cli/format.ts";
 import { loadConfig } from "../config/load.ts";
 import { buildEnvByProxy, resolveSession } from "../core/resolve-session.ts";
-import { pickBoolean, pickString } from "../utils/pick.ts";
-import { writePerProxyEnvTables } from "./env-table.ts";
+import { ErrorCode, OrchportError } from "../utils/errors.ts";
+import { pickBoolean, pickString, pickStringArray } from "../utils/pick.ts";
+import {
+  splitEnvSections,
+  writePerProxyEnvTables,
+  type EnvSection,
+} from "./env-table.ts";
 
 const log = getLogger(["orchport", "env"]);
 
@@ -19,8 +25,57 @@ const shellQuote = (s: string): string => {
   return `'${s.replaceAll("'", `'\\''`)}'`;
 };
 
+type EnvLineFormat = "dotenv" | "plain" | "shell";
+
+const writeEnvLines = (
+  env: Record<string, string>,
+  format: EnvLineFormat
+): void => {
+  for (const [key, val] of Object.entries(env)) {
+    if (format === "shell") {
+      process.stdout.write(`export ${key}=${shellQuote(val)}\n`);
+    } else {
+      process.stdout.write(`${key}=${val}\n`);
+    }
+  }
+};
+
+const writeSectionedEnv = (
+  sections: readonly EnvSection[],
+  format: EnvLineFormat
+): void => {
+  for (const [index, section] of sections.entries()) {
+    if (index > 0) {
+      process.stdout.write("\n");
+    }
+    process.stdout.write(`[${section.name}]\n`);
+    writeEnvLines(section.env, format);
+  }
+};
+
+const nestedEnvJson = (
+  sections: readonly EnvSection[]
+): {
+  global: Record<string, string>;
+  proxies: Record<string, Record<string, string>>;
+} => {
+  const out: {
+    global: Record<string, string>;
+    proxies: Record<string, Record<string, string>>;
+  } = { global: {}, proxies: {} };
+  for (const section of sections) {
+    if (section.name === "global") {
+      out.global = section.env;
+    } else {
+      out.proxies[section.name] = section.env;
+    }
+  }
+  return out;
+};
+
 /**
- * Print merged env: **default** on a TTY is one **Variable / Value** table per configured proxy (global `env` + standard `ORCHPORT_*` in each). `KEY=value` when piped or with `--plain`. Use `--json`, `--shell`, or `--dotenv` for scripts (single flat object, no `run` target — same as before).
+ * Print resolved env. With `env <proxy>`, output the exact env injected by `run <proxy>`.
+ * Without a proxy target, output all generated env grouped as global + proxy sections.
  */
 export const envCommand = define({
   name: "env",
@@ -52,6 +107,11 @@ export const envCommand = define({
         "Print KEY=value lines even on a terminal (default is a colored table on TTY)",
       default: false,
     },
+    target: {
+      type: "positional",
+      multiple: true,
+      description: "Optional proxy name to print the exact run-target env",
+    },
   },
   run: async (ctx) => {
     const cwd = ctx.env.cwd ?? process.cwd();
@@ -71,6 +131,30 @@ export const envCommand = define({
       cwd,
       config: pickString(values, "config"),
     });
+    const targets = pickStringArray(values, "target") ?? [];
+    if (targets.length > 1) {
+      throw new OrchportError(
+        ErrorCode.CLI_USAGE,
+        `env accepts at most one proxy name, got ${targets.length}`,
+        {
+          hint: "Use `orchport env <proxy>` with one configured proxy name.",
+          context: {
+            proxies: Object.keys(config.proxies).toSorted().join(", "),
+          },
+        }
+      );
+    }
+    const target = targets[0]?.trim() || undefined;
+    if (target !== undefined && config.proxies[target] === undefined) {
+      throw new OrchportError(
+        ErrorCode.RUN_UNKNOWN_PROXY,
+        `Unknown proxy "${target}" in config`,
+        {
+          hint: `Use one of: ${Object.keys(config.proxies).toSorted().join(", ")}`,
+          context: { proxy: target },
+        }
+      );
+    }
     const withProxy =
       config.mode === "local-proxy" || (pickBoolean(values, "proxy") ?? false);
     log.debug("env: withProxy={withProxy} config.mode={mode}", {
@@ -86,6 +170,7 @@ export const envCommand = define({
       worktreeCli: pickString(values, "worktree"),
       runId: newRunId(),
       withProxy,
+      runTarget: target,
     });
     log.debug("env: done runId={runId} keys={n} mode={mode} sld={sld}", {
       runId: session.env.ORCHPORT_RUN_ID ?? "",
@@ -104,32 +189,76 @@ export const envCommand = define({
     const shellOut = pickBoolean(values, "shell") ?? false;
     const dotenvOut = pickBoolean(values, "dotenv") ?? false;
     const plainOut = pickBoolean(values, "plain") ?? false;
+    const lineFormat: EnvLineFormat = shellOut
+      ? "shell"
+      : dotenvOut
+        ? "dotenv"
+        : "plain";
+    const proxyMeta = Object.fromEntries(
+      Object.entries(session.proxies).map(([name, proxy]) => [
+        name,
+        { url: proxy.url, localUrl: proxy.localUrl },
+      ])
+    );
+
+    if (target !== undefined) {
+      if (jsonOut) {
+        process.stdout.write(`${JSON.stringify(session.env, null, 2)}\n`);
+        return;
+      }
+      if (shellOut || dotenvOut || plainOut || process.stdout.isTTY !== true) {
+        writeEnvLines(session.env, lineFormat);
+        return;
+      }
+      const useColor = cliUseColor(process.stdout, {
+        noColor: pickBoolean(values, "noColor") ?? false,
+      });
+      writePerProxyEnvTables(
+        { [target]: session.env },
+        {
+          useColor,
+          split: false,
+          header: {
+            command: `orchport env ${target}`,
+            mode: session.mode,
+            workspace: session.sld,
+            worktree: session.worktree,
+          },
+          proxies: proxyMeta,
+        }
+      );
+      return;
+    }
+
+    const envByProxy = buildEnvByProxy(session, config);
+    const sections = splitEnvSections(envByProxy, { proxies: proxyMeta });
 
     if (jsonOut) {
-      process.stdout.write(`${JSON.stringify(session.env, null, 2)}\n`);
+      process.stdout.write(
+        `${JSON.stringify(nestedEnvJson(sections), null, 2)}\n`
+      );
       return;
     }
-    if (shellOut) {
-      for (const [key, val] of Object.entries(session.env)) {
-        process.stdout.write(`export ${key}=${shellQuote(val)}\n`);
-      }
-      return;
-    }
-    if (dotenvOut) {
-      for (const [key, val] of Object.entries(session.env)) {
-        process.stdout.write(`${key}=${val}\n`);
-      }
+    if (shellOut || dotenvOut || plainOut || process.stdout.isTTY !== true) {
+      writeSectionedEnv(sections, lineFormat);
       return;
     }
     const tty = process.stdout.isTTY === true;
-    const useTable = tty && !plainOut;
+    const useTable = tty;
     if (useTable) {
-      const useColor = process.env.NO_COLOR === undefined;
-      writePerProxyEnvTables(buildEnvByProxy(session, config), { useColor });
+      const useColor = cliUseColor(process.stdout, {
+        noColor: pickBoolean(values, "noColor") ?? false,
+      });
+      writePerProxyEnvTables(envByProxy, {
+        useColor,
+        header: {
+          mode: session.mode,
+          workspace: session.sld,
+          worktree: session.worktree,
+        },
+        proxies: proxyMeta,
+      });
       return;
-    }
-    for (const [key, val] of Object.entries(session.env)) {
-      process.stdout.write(`${key}=${val}\n`);
     }
   },
 });

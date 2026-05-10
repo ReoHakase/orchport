@@ -581,15 +581,16 @@ export default defineConfig({
 
 ```bash
 orchport env
+orchport env api
 orchport env --json
-orchport env --shell
-orchport env --dotenv
+orchport env api --shell
+orchport env api --dotenv
 ```
 
-`orchport env` はコマンドを実行せず、生成envだけ表示する。
+`orchport env` はコマンドを実行せず、生成 env を表示する。proxy 名を指定しない場合は `global` と各 proxy の section に分けて全体を表示する。`orchport env <proxy>` は `orchport run <proxy>` が注入する env を flat に表示し、proxy ごとの `PORT` も含む。
 
 ```bash
-eval "$(orchport env --shell)"
+eval "$(orchport env api --shell)"
 turbo dev
 ```
 
@@ -802,7 +803,7 @@ app:
 ```json
 {
   "scripts": {
-    "dev": "next dev --hostname 127.0.0.1 --port $ORCHPORT_WEB_PORT"
+    "dev": "next dev --hostname 127.0.0.1 --port $PORT"
   }
 }
 ```
@@ -812,7 +813,7 @@ Vite:
 ```json
 {
   "scripts": {
-    "dev": "vite --host 127.0.0.1 --port $ORCHPORT_WEB_PORT --strictPort"
+    "dev": "vite --host 127.0.0.1 --port $PORT --strictPort"
   }
 }
 ```
@@ -820,7 +821,7 @@ Vite:
 Bun API:
 
 ```ts
-const port = Number(process.env.ORCHPORT_API_PORT ?? process.env.PORT ?? 3000);
+const port = Number(process.env.PORT ?? process.env.ORCHPORT_API_PORT ?? 3000);
 
 Bun.serve({
   hostname: "127.0.0.1",
@@ -887,18 +888,18 @@ orchport/
 
 次は **Phase 1〜3 のコア**が実装済み。Phase 4（Tailscale 等）は未着手。
 
-| 領域                                     | 状態 | メモ                                                                                                                                                                                                                                                                                                                  |
-| ---------------------------------------- | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Phase 1 `run` / `env` / `init`           | 済   | Gunshi。設定探索・YAML/JSON/TS・Valibot。`orchport run -- cmd` で `-` 付き argv を渡す。                                                                                                                                                                                                                              |
-| ネスト pass-through                      | 済   | `ORCHPORT=1` を標準とし、互換で `orchport=1` も受け入れる。                                                                                                                                                                                                                                                           |
-| Phase 2 `list` / `kill` / `doctor`       | 済   | state は `ORCHPORT_STATE_DIR` または XDG。`doctor` は状態ディレクトリへプローブファイルで読み書き確認。zsh 補完は未実装。                                                                                                                                                                                             |
-| Phase 3 ビルトイン `*.localhost` / proxy | 済   | 既定 URL はコード内規則。TS のみ任意 `url` 関数。`local-proxy` + `run` でリバースプロキシ（Bun）。オプションで **`orchport proxy up`** が長寿命プロキシ + `proxy/routes/*.json` の動的マージ（`run` はデーモン生存時はルート書き込みのみ）。                                                                          |
-| 構造化 CLI エラー                        | 済   | `OrchportError` は **`ErrorCode`** + `hint` + `context`。グローバル **`--json`** のとき致命的エラーは **stderr に JSON**（`orchportErrorToJson`）。人間向けは `src/cli/format.ts`。                                                                                                                                   |
-| `list` / `env` / `doctor` 出力           | 済   | `list` は TTY で **table** のステータス付き表（`--json` は配列のまま）。`orchport env` は TTY でプロキシごとの **table**（グローバル `env` と `ORCHPORT_*` を各セクションに表示）。`doctor` は項目ごとの ✓/✗ 行（config / state / openssl / proxy daemon）。                                                          |
-| 443 / sudo                               | 済   | `proxy.httpsPort` で追加リスナを試行。失敗は warn のみでメインプロキシ継続。Unix では `orchport … run --elevate -- …` で `sudo -E` 再実行を試す（`--elevate` は `run` の直後）。`bun build --compile` バイナリは `argv[0]` が `/$bunfs/…` のため `ORCHPORT_SUDO_ARGV0` に実パスを設定するか手動で `sudo orchport …`。 |
-| sandbox state フォールバック             | 済   | state 書き込み失敗時は記録スキップ + `ORCHPORT_VOLATILE_STATE=1` を子に渡す。                                                                                                                                                                                                                                         |
-| dev TLS → Node/Bun/Deno 信頼 PEM         | 済   | `run` でプロキシが TLS（`tls: dev` または PEM ファイル）のとき、子に `ORCHPORT_DEV_TLS_CERT_FILE` を注入。`NODE_EXTRA_CA_CERTS` / `DENO_CERT` は未設定時のみ同一 PEM パスを設定（既存値は上書きしない）。`orchport env` には出さない（実行時 PEM が無い）。                                                           |
-| `bun build --compile`                    | 済   | `bun run build:compile` で単一バイナリ（`dist/orchport`）。既存 `build` はバンドルのみ。                                                                                                                                                                                                                              |
+| 領域                                     | 状態 | メモ                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ---------------------------------------- | ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Phase 1 `run` / `env` / `init`           | 済   | Gunshi。設定探索・YAML/JSON/TS・Valibot。`orchport run -- cmd` で `-` 付き argv を渡す。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ネスト pass-through                      | 済   | `ORCHPORT=1` を標準とし、互換で `orchport=1` も受け入れる。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| Phase 2 `list` / `kill` / `doctor`       | 済   | state は `ORCHPORT_STATE_DIR` または XDG。`doctor` は状態ディレクトリへプローブファイルで読み書き確認。zsh 補完は未実装。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Phase 3 ビルトイン `*.localhost` / proxy | 済   | 既定 URL はコード内規則。TS のみ任意 `url` 関数。`local-proxy` + `run` でリバースプロキシ（Bun）。オプションで **`orchport proxy up`** が長寿命プロキシ + `proxy/routes/*.json` の動的マージ（`run` はデーモン生存時はルート書き込みのみ）。                                                                                                                                                                                                                                                                                                                                                                   |
+| 構造化 CLI エラー                        | 済   | `OrchportError` は **`ErrorCode`** + `hint` + `context`。グローバル **`--json`** のとき致命的エラーは **stderr に JSON**（`orchportErrorToJson`）。人間向けは `src/cli/format.ts`。                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Human CLI 出力                           | 済   | `run` / `env` / `list` / `switch` / `doctor` は人間向けに restrained な色・状態記号・`Next:` ヒントを出す。表は `@visulima/tabular` + header divider の borderless 表示。`env` は `global` と proxy ごとの public URL → local URL section に分け、global env の重複表示を避ける。`env <proxy>` は `run <proxy>` と同じ flat env を表示し、proxy ごとの生成 `PORT` を含む。proxy 未指定の `--json` は nested、`--plain` / `--shell` / `--dotenv` は sectioned text。`list` / `switch` は `switchables` の実ルート（incoming URL → local target ← target public URL）を表示。child stdout は script 互換を維持。 |
+| 443 / sudo                               | 済   | `proxy.httpsPort` で追加リスナを試行。失敗は warn のみでメインプロキシ継続。Unix では `orchport … run --elevate -- …` で `sudo -E` 再実行を試す（`--elevate` は `run` の直後）。`bun build --compile` バイナリは `argv[0]` が `/$bunfs/…` のため `ORCHPORT_SUDO_ARGV0` に実パスを設定するか手動で `sudo orchport …`。                                                                                                                                                                                                                                                                                          |
+| sandbox state フォールバック             | 済   | state 書き込み失敗時は記録スキップ + `ORCHPORT_VOLATILE_STATE=1` を子に渡す。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| dev TLS → Node/Bun/Deno 信頼 PEM         | 済   | `run` でプロキシが TLS（`tls: dev` または PEM ファイル）のとき、子に `ORCHPORT_DEV_TLS_CERT_FILE` を注入。`NODE_EXTRA_CA_CERTS` / `DENO_CERT` は未設定時のみ同一 PEM パスを設定（既存値は上書きしない）。`orchport env` には出さない（実行時 PEM が無い）。                                                                                                                                                                                                                                                                                                                                                    |
+| `bun build --compile`                    | 済   | `bun run build:compile` で単一バイナリ（`dist/orchport`）。既存 `build` はバンドルのみ。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 
 ---
 

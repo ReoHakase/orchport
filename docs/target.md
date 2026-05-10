@@ -100,3 +100,30 @@ worktree や agent ごとに **ベースドメインやポートをずらす**�
 ## orchport での再現（このリポジトリの CLI）
 
 上記の変数束ねは **orchport** の設定 `env` でテンプレート化できる。サンプルは [test/e2e/fixtures/target-like-yaml/orchport.yaml](test/e2e/fixtures/target-like-yaml/orchport.yaml)（同等の JSON / TS は `target-like-json` / `target-like-ts`）。ルートで `orchport run -- turbo dev` のように叩く。ラップするコマンドに **`--` 以降**で `-` 付きオプションを渡す（例: `orchport run -- pnpm exec vite --port $ORCHPORT_WEB_PORT`）。state や run 記録の置き場は `ORCHPORT_STATE_DIR` または XDG 準拠の `~/.local/state/orchport`。
+
+人間向け出力は `env` / `list` / `switch` / `doctor` で状態記号と次アクションを出す。script では `env <proxy> --json` / `--shell` / `--dotenv` / `--plain` を使う。`env` の proxy 未指定出力は `global` と各 proxy の section 表示で、`env <proxy>` は `run <proxy>` が注入する flat env を表示する。orchport が生成する `PORT` は proxy ごとの実 port で、config の `env.PORT` より優先される。
+
+```txt
+orchport env
+mode local-proxy  workspace myapp  worktree main
+
+global
+Variable                  Value
+───────────────────────────────────────────────────────────
+ORCHPORT                  1
+APP_BASE_URL              https://web.myapp.test
+
+● api  https://api.myapp.test (→ http://localhost:8001)
+Variable                  Value
+───────────────────────────────────────────────────────────
+PORT                      8001
+ORCHPORT_API_URL          https://api.myapp.test
+TURSO_DATABASE_URL        https://db.myapp.test
+```
+
+`switchables` がある場合、`list` / `switch` は安定した incoming URL と現在の転送先を表示する。
+
+```txt
+Switchable
+https://api.myapp.test/auth/callback/* → http://localhost:8001/auth/callback/* (← https://api.fix-xxx.myapp.test/auth/callback/*)
+```

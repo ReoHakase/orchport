@@ -112,16 +112,6 @@ const buildStandardEnvBlock = (
     ORCHPORT_CONFIG: p.configPath ?? "",
   };
 
-  const proxyNames = Object.keys(p.rebuilt).toSorted();
-  for (const name of proxyNames) {
-    const e = p.rebuilt[name];
-    const prefix = entryKeyToEnvPrefix(name);
-    standard[`ORCHPORT_${prefix}_PORT`] = String(e.port);
-    standard[`ORCHPORT_${prefix}_HOST`] = e.host;
-    standard[`ORCHPORT_${prefix}_URL`] = e.url;
-    standard[`ORCHPORT_${prefix}_LOCAL_URL`] = e.localUrl;
-  }
-
   if (p.proxyPort !== undefined) {
     standard.ORCHPORT_PROXY_PORT = String(p.proxyPort);
     const tls = p.config.proxy?.tls;
@@ -139,6 +129,35 @@ const buildStandardEnvBlock = (
 
   return standard;
 };
+
+const buildProxyStandardEnvBlock = (
+  rebuilt: Record<string, ResolvedProxyShape>,
+  proxyNames: readonly string[]
+): Record<string, string> => {
+  const standard: Record<string, string> = {};
+  for (const name of proxyNames) {
+    const e = rebuilt[name];
+    if (e === undefined) {
+      continue;
+    }
+    const prefix = entryKeyToEnvPrefix(name);
+    standard[`ORCHPORT_${prefix}_PORT`] = String(e.port);
+    standard[`ORCHPORT_${prefix}_HOST`] = e.host;
+    standard[`ORCHPORT_${prefix}_URL`] = e.url;
+    standard[`ORCHPORT_${prefix}_LOCAL_URL`] = e.localUrl;
+  }
+  return standard;
+};
+
+const buildAllProxyStandardEnvBlock = (
+  rebuilt: Record<string, ResolvedProxyShape>
+): Record<string, string> =>
+  buildProxyStandardEnvBlock(rebuilt, Object.keys(rebuilt).toSorted());
+
+const buildTargetProxyStandardEnvBlock = (
+  rebuilt: Record<string, ResolvedProxyShape>,
+  proxyName: string
+): Record<string, string> => buildProxyStandardEnvBlock(rebuilt, [proxyName]);
 
 const resolveGlobalUserFlat = (
   config: LoadedConfig,
@@ -178,6 +197,12 @@ const mergeStandardWithUserFlat = (
 ): Record<string, string> => {
   const env: Record<string, string> = { ...standard };
   for (const [k, val] of Object.entries(userFlat)) {
+    if (k === "PORT") {
+      if (logReserved) {
+        log.debug("Skipping generated proxy env override {key}", { key: k });
+      }
+      continue;
+    }
     if (isReservedOrchportEnvKey(k)) {
       if (logReserved) {
         log.debug("Skipping reserved env override {key}", { key: k });
@@ -186,6 +211,37 @@ const mergeStandardWithUserFlat = (
     }
     env[k] = val;
   }
+  return env;
+};
+
+const mergeProxyTargetEnv = (
+  params: {
+    coreStandard: Record<string, string>;
+    globalFlat: Record<string, string>;
+    proxyName: string;
+    config: LoadedConfig;
+    ictx: InterpolateCtx;
+    rebuilt: Record<string, ResolvedProxyShape>;
+  },
+  logReserved: boolean
+): Record<string, string> => {
+  const userFlat = { ...params.globalFlat };
+  const pe = params.config.proxies[params.proxyName]?.env;
+  if (pe !== undefined) {
+    const extra = interpolateEnvValues(pe, params.ictx);
+    for (const [k, val] of Object.entries(extra)) {
+      userFlat[k] = val;
+    }
+  }
+  const env = mergeStandardWithUserFlat(
+    {
+      ...params.coreStandard,
+      ...buildTargetProxyStandardEnvBlock(params.rebuilt, params.proxyName),
+    },
+    userFlat,
+    logReserved
+  );
+  env.PORT = String(params.rebuilt[params.proxyName]?.port ?? "");
   return env;
 };
 
@@ -198,7 +254,7 @@ export const buildEnvByProxy = (
   config: LoadedConfig
 ): Record<string, Record<string, string>> => {
   const runId = session.env.ORCHPORT_RUN_ID ?? "";
-  const standard = buildStandardEnvBlock({
+  const coreStandard = buildStandardEnvBlock({
     runId,
     sld: session.sld,
     tld: session.tld,
@@ -225,15 +281,17 @@ export const buildEnvByProxy = (
   const out: Record<string, Record<string, string>> = {};
 
   for (const name of proxyNames) {
-    const userFlat = { ...globalFlat };
-    const pe = config.proxies[name]?.env;
-    if (pe !== undefined) {
-      const extra = interpolateEnvValues(pe, ictx);
-      for (const [k, val] of Object.entries(extra)) {
-        userFlat[k] = val;
-      }
-    }
-    out[name] = mergeStandardWithUserFlat(standard, userFlat, false);
+    out[name] = mergeProxyTargetEnv(
+      {
+        coreStandard,
+        globalFlat,
+        proxyName: name,
+        config,
+        ictx,
+        rebuilt: session.proxies,
+      },
+      false
+    );
   }
 
   return out;
@@ -377,7 +435,7 @@ export const resolveSession = async (
     }
   }
 
-  const standard = buildStandardEnvBlock({
+  const coreStandard = buildStandardEnvBlock({
     runId,
     sld,
     tld,
@@ -398,7 +456,7 @@ export const resolveSession = async (
     proxyPort
   );
 
-  let userFlat = resolveGlobalUserFlat(
+  const globalFlat = resolveGlobalUserFlat(
     config,
     ictx,
     rebuilt,
@@ -408,17 +466,17 @@ export const resolveSession = async (
     worktreeHostPrefix
   );
 
-  if (rt !== undefined && rt !== "") {
-    const pe = config.proxies[rt]?.env;
-    if (pe !== undefined) {
-      const extra = interpolateEnvValues(pe, ictx);
-      for (const [k, val] of Object.entries(extra)) {
-        userFlat[k] = val;
-      }
-    }
-  }
-
-  const env = mergeStandardWithUserFlat(standard, userFlat, true);
+  const env =
+    rt !== undefined && rt !== ""
+      ? mergeProxyTargetEnv(
+          { coreStandard, globalFlat, proxyName: rt, config, ictx, rebuilt },
+          true
+        )
+      : mergeStandardWithUserFlat(
+          { ...coreStandard, ...buildAllProxyStandardEnvBlock(rebuilt) },
+          globalFlat,
+          true
+        );
 
   log.debug(
     "Resolved session runId={runId} proxies={n} envKeys={k} proxyPort={proxy}",
