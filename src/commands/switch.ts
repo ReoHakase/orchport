@@ -3,12 +3,25 @@ import { basename } from "node:path";
 import { getLogger } from "@logtape/logtape";
 import { define } from "gunshi";
 
+import {
+  bold,
+  cliUseColor,
+  formatNextLine,
+  formatRouteLine,
+  statusIcon,
+  type CliUiOptions,
+} from "../cli/format.ts";
 import { loadConfig } from "../config/load.ts";
 import { normalizeConfigTld } from "../config/tld.ts";
-import { setSwitchTargetsFromConfig } from "../state/switch-registry.ts";
+import { listRunStates } from "../state/store.ts";
+import {
+  readSwitchRegistry,
+  setSwitchTargetsFromConfig,
+} from "../state/switch-registry.ts";
 import { ErrorCode, OrchportError } from "../utils/errors.ts";
 import { getGitRepositoryBasename } from "../utils/git.ts";
-import { pickString } from "../utils/pick.ts";
+import { pickBoolean, pickString } from "../utils/pick.ts";
+import { formatSwitchableRoutes } from "./switchable-output.ts";
 
 const log = getLogger(["orchport", "switch"]);
 
@@ -58,10 +71,21 @@ export const switchCommand = define({
       targetWorktree: slug,
       proxies: config.proxies,
     });
+    const ui: CliUiOptions = {
+      color: cliUseColor(process.stdout, {
+        noColor: pickBoolean(ctx.values, "noColor") ?? false,
+      }),
+    };
     if (keys.length === 0) {
       log.warning("switch: no switchables in config; nothing to update");
       process.stdout.write(
-        "No proxy defines `switchables` paths; nothing updated.\n"
+        `${statusIcon("warn", ui)} No proxy defines \`switchables\` paths; nothing updated.\n`
+      );
+      process.stdout.write(
+        formatNextLine(
+          "add `switchables` paths to a proxy in your orchport config.",
+          ui
+        )
       );
       return;
     }
@@ -69,8 +93,21 @@ export const switchCommand = define({
       n: String(keys.length),
       wt: slug,
     });
-    for (const k of keys) {
-      process.stdout.write(`${k} -> ${slug}\n`);
+    process.stdout.write(
+      `${statusIcon("ok", ui)} switch updated ${keys.length} route${keys.length === 1 ? "" : "s"}\n`
+    );
+    process.stdout.write(`${bold("target", ui)} ${slug}\n\n`);
+    const registry = await readSwitchRegistry();
+    const states = await listRunStates();
+    const routes = formatSwitchableRoutes(registry, states, { keys });
+    for (const route of routes) {
+      process.stdout.write(formatRouteLine(route, ui));
     }
+    process.stdout.write(
+      formatNextLine(
+        "ensure the target worktree has a matching `orchport run` state, or requests return 502.",
+        ui
+      )
+    );
   },
 });

@@ -6,12 +6,21 @@ import { join } from "node:path";
 import { getLogger } from "@logtape/logtape";
 import { define } from "gunshi";
 
-import { formatCliFailLine, formatCliOkLine } from "../cli/format.ts";
+import {
+  bold,
+  cliUseColor,
+  formatCliFailLine,
+  formatCliOkLine,
+  formatNextLine,
+  muted,
+  statusIcon,
+  type CliUiOptions,
+} from "../cli/format.ts";
 import { loadConfig } from "../config/load.ts";
 import { pidAlive, readProxyDaemonState } from "../state/proxy-daemon.ts";
 import { getStateDir } from "../state/xdg.ts";
 import { ErrorCode, OrchportError } from "../utils/errors.ts";
-import { pickString } from "../utils/pick.ts";
+import { pickBoolean, pickString } from "../utils/pick.ts";
 
 const log = getLogger(["orchport", "doctor"]);
 
@@ -50,8 +59,10 @@ export const doctorCommand = define({
   description: "Check orchport installation and config",
   run: async (ctx) => {
     const cwd = ctx.env.cwd ?? process.cwd();
-    const tty =
-      process.stdout.isTTY === true && process.env.NO_COLOR === undefined;
+    const tty = cliUseColor(process.stdout, {
+      noColor: pickBoolean(ctx.values, "noColor") ?? false,
+    });
+    const ui: CliUiOptions = { color: tty };
     log.debug("doctor: cwd={cwd}", { cwd });
     const state = getStateDir();
     log.debug("doctor: state dir {state}", { state });
@@ -70,9 +81,7 @@ export const doctorCommand = define({
     }
 
     process.stdout.write("\n");
-    process.stdout.write(
-      tty ? "\x1b[1morchport doctor\x1b[0m\n\n" : "orchport doctor\n\n"
-    );
+    process.stdout.write(`${bold("orchport doctor", ui)}\n\n`);
 
     await probeStateDirReadWrite(state);
     process.stdout.write(
@@ -90,6 +99,9 @@ export const doctorCommand = define({
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       process.stdout.write(formatCliFailLine("config", msg, { tty }));
+      process.stdout.write(
+        formatNextLine("fix the config file and rerun `orchport doctor`.", ui)
+      );
     }
 
     const oc = spawnSync("openssl", ["version"], {
@@ -108,15 +120,23 @@ export const doctorCommand = define({
           { tty }
         )
       );
+      process.stdout.write(
+        formatNextLine(
+          "install OpenSSL or configure file-based TLS certificates.",
+          ui
+        )
+      );
     }
 
     const daemon = readProxyDaemonState();
     if (daemon === null) {
       process.stdout.write(
-        formatCliFailLine(
-          "proxy",
-          "daemon not running (optional: sudo orchport proxy up)",
-          { tty }
+        `${statusIcon("stopped", ui)}  ${bold("proxy".padEnd(10, " "), ui)}  ${muted("daemon not running (optional)", ui)}\n`
+      );
+      process.stdout.write(
+        formatNextLine(
+          "run `orchport proxy up` only if you want a long-lived reverse proxy.",
+          ui
         )
       );
     } else if (pidAlive(daemon.pid)) {
@@ -133,6 +153,12 @@ export const doctorCommand = define({
           "proxy",
           `stale daemon.json (pid ${daemon.pid} dead)`,
           { tty }
+        )
+      );
+      process.stdout.write(
+        formatNextLine(
+          "run `orchport proxy down` and then `orchport proxy up`.",
+          ui
         )
       );
     }

@@ -3,6 +3,14 @@ import { randomBytes } from "node:crypto";
 import { getLogger } from "@logtape/logtape";
 import { define } from "gunshi";
 
+import {
+  bold,
+  cliUseColor,
+  formatNextLine,
+  muted,
+  statusIcon,
+  type CliUiOptions,
+} from "../cli/format.ts";
 import { loadConfig } from "../config/load.ts";
 import { buildLocalProxyHost } from "../core/local-proxy-host.ts";
 import { resolveSession } from "../core/resolve-session.ts";
@@ -32,6 +40,12 @@ const newRunId = (): string => randomBytes(8).toString("hex");
 
 const reexecRunWithSudo = (): void => {
   tryReexecWithSudo(ORCHPORT_ELEVATED_RUN);
+};
+
+const writeRunLine = (enabled: boolean, text: string): void => {
+  if (enabled) {
+    process.stderr.write(`${text}\n`);
+  }
 };
 
 /** If the first token is a configured proxy name, treat it as `orchport run <proxy> -- cmd…`. */
@@ -101,6 +115,13 @@ export const runCommand = define({
     const nested = pickBoolean(values, "nested") ?? false;
     const forceEnv = pickBoolean(values, "forceEnv") ?? false;
     const proxyFlag = pickBoolean(values, "proxy") ?? false;
+    const quiet = pickBoolean(values, "quiet") ?? false;
+    const humanStderr = !quiet;
+    const ui: CliUiOptions = {
+      color: cliUseColor(process.stderr, {
+        noColor: pickBoolean(values, "noColor") ?? false,
+      }),
+    };
     const fromArgs = pickStringArray(values, "command") ?? [];
     const rest = ctx.rest ?? [];
     const cmdTokens = [...fromArgs, ...rest];
@@ -118,6 +139,10 @@ export const runCommand = define({
       isNestedOrchportMarker(process.env) && !forceEnv && !nested;
 
     if (passThrough) {
+      writeRunLine(
+        humanStderr,
+        `${statusIcon("info", ui)} nested orchport environment detected; passing through`
+      );
       log.info("run: nested pass-through (skipping resolution) cmd={cmd}", {
         cmd: cmdTokens.join(" "),
       });
@@ -179,6 +204,14 @@ export const runCommand = define({
       withProxy,
       runTarget,
     });
+    writeRunLine(
+      humanStderr,
+      `${bold(runTarget === undefined ? "orchport run" : `orchport run ${runTarget}`, ui)}`
+    );
+    writeRunLine(
+      humanStderr,
+      `${statusIcon("info", ui)} workspace ${session.sld} / worktree ${session.worktree}`
+    );
 
     const childEnv: Record<string, string | undefined> = {
       ...process.env,
@@ -270,6 +303,28 @@ export const runCommand = define({
       fileTls = r.fileTls;
     }
 
+    if (session.proxyPort !== undefined) {
+      const scheme =
+        Object.values(childEnv).some(
+          (value) => typeof value === "string" && value.startsWith("https://")
+        ) || fileTls !== undefined
+          ? "HTTPS"
+          : "HTTP";
+      writeRunLine(
+        humanStderr,
+        `${statusIcon("info", ui)} proxy ${scheme} on :${childEnv.ORCHPORT_PROXY_PORT ?? String(session.proxyPort)}`
+      );
+      if (
+        session.env.ORCHPORT_HTTPS_PROXY_PORT !== undefined &&
+        childEnv.ORCHPORT_HTTPS_PROXY_PORT === undefined
+      ) {
+        writeRunLine(
+          humanStderr,
+          `${statusIcon("warn", ui)} extra HTTPS :${session.env.ORCHPORT_HTTPS_PROXY_PORT} unavailable; public URLs use :${childEnv.ORCHPORT_PROXY_PORT ?? String(session.proxyPort)}`
+        );
+      }
+    }
+
     if (fileTls) {
       applyProxyTlsCertToChildEnv(childEnv, fileTls.cert);
     }
@@ -314,6 +369,11 @@ export const runCommand = define({
       cmd: childCmd.join(" "),
       runId,
     });
+    writeRunLine(
+      humanStderr,
+      `${statusIcon("info", ui)} command ${childCmd.join(" ")}`
+    );
+    writeRunLine(humanStderr, `${muted(`run ${runId}`, ui)}\n`);
     log.trace("run: child env ORCHPORT_* count={n}", {
       n: String(
         Object.keys(childEnv).filter(
@@ -328,6 +388,19 @@ export const runCommand = define({
       code: String(code),
       runId,
     });
+    const ok = code === 0;
+    writeRunLine(
+      humanStderr,
+      `${statusIcon(ok ? "ok" : "error", ui)} child exited ${code}  ${muted(`run ${runId}`, ui)}`
+    );
+    if (!ok) {
+      process.stderr.write(
+        formatNextLine(
+          "inspect the child command output above and rerun after fixing it.",
+          ui
+        )
+      );
+    }
     detach();
     if (usedDaemon) {
       await cleanupDaemonRouteRegistration(runId);

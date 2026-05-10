@@ -1,9 +1,24 @@
 import { getLogger } from "@logtape/logtape";
+import type { TableCell } from "@visulima/tabular";
 import { define } from "gunshi";
-import { getBorderCharacters, table } from "table";
 
+import {
+  bold,
+  cliUseColor,
+  formatNextLine,
+  formatRouteLine,
+  muted,
+  statusIcon,
+  type CliUiOptions,
+} from "../cli/format.ts";
+import { formatHumanTable } from "../cli/human-table.ts";
 import { listRunStates } from "../state/store.ts";
+import { readSwitchRegistry } from "../state/switch-registry.ts";
 import { pickBoolean, pickString } from "../utils/pick.ts";
+import {
+  formatSwitchableRoutes,
+  hasSwitchablesForRun,
+} from "./switchable-output.ts";
 
 const log = getLogger(["orchport", "list"]);
 
@@ -16,10 +31,31 @@ const pidAlive = (pid: number): boolean => {
   }
 };
 
-const termWidth = (): number => {
-  const c = process.stdout.columns;
-  return typeof c === "number" && c > 48 ? c : 100;
+const proxyNamesForRows = (
+  rows: ReadonlyArray<{ proxies: Record<string, unknown> }>
+): string[] => {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const row of rows) {
+    for (const name of Object.keys(row.proxies)) {
+      if (!seen.has(name)) {
+        seen.add(name);
+        out.push(name);
+      }
+    }
+  }
+  return out;
 };
+
+const centerCell = (content: string): TableCell => ({
+  content,
+  hAlign: "center",
+});
+
+const plainCell = (content: string): TableCell => ({ content });
+
+const maxTextWidth = (values: string[], minimum: number): number =>
+  values.reduce((max, value) => Math.max(max, value.length), minimum);
 
 /** Reads persisted run state from disk; `--json` or human-readable table. Volatile runs (no state file) do not appear. */
 export const listCommand = define({
@@ -68,63 +104,151 @@ export const listCommand = define({
       return;
     }
 
-    const tty =
-      process.stdout.isTTY === true && process.env.NO_COLOR === undefined;
-    const tw = termWidth();
-    const useColor = tty;
+    const useColor = cliUseColor(process.stdout, {
+      noColor: pickBoolean(ctx.values, "noColor") ?? false,
+    });
+    const ui: CliUiOptions = { color: useColor };
+    const registry = await readSwitchRegistry();
+    const routes = formatSwitchableRoutes(registry, rows);
 
     if (filtered.length === 0) {
-      process.stdout.write("(no recorded runs)\n");
+      process.stdout.write(`${muted("(no recorded runs)", ui)}\n`);
       return;
     }
 
-    const head: [string, string, string, string, string] = useColor
-      ? [
-          "\x1b[1m\x1b[35mRun\x1b[0m",
-          "\x1b[1m\x1b[35mStatus\x1b[0m",
-          "\x1b[1m\x1b[35mPID\x1b[0m",
-          "\x1b[1m\x1b[35mWorkspace\x1b[0m",
-          "\x1b[1m\x1b[35mProxies\x1b[0m",
-        ]
-      : ["Run", "Status", "PID", "Workspace", "Proxies"];
+    const proxyNames = proxyNamesForRows(filtered);
+    const proxyColumns = proxyNames.length > 0 ? proxyNames : ["-"];
+    const runWidth = maxTextWidth(
+      filtered.map((row) => row.runId.slice(0, 10)),
+      "Run".length
+    );
+    const statusWidth =
+      maxTextWidth(
+        filtered.map((row) => (row.running ? "● needs target" : "○ stopped")),
+        "Status".length
+      ) + 1;
+    const pidWidth = maxTextWidth(
+      filtered.map((row) => String(row.rootPid)),
+      "PID".length
+    );
+    const workspaceWidth = maxTextWidth(
+      filtered.map((row) => `${row.workspace}/${row.worktree}`),
+      "Workspace".length
+    );
+    const switchesWidth = "Switches".length;
+    const proxyWidths = proxyColumns.map((name) =>
+      maxTextWidth(
+        filtered.map((row) => {
+          const port = row.proxies[name]?.port;
+          return port === undefined ? "-" : String(port);
+        }),
+        name.length
+      )
+    );
+    const proxyDivider = muted("│", ui);
+    const headers: TableCell[][] = [
+      [
+        bold("Run", ui),
+        bold("Status", ui),
+        bold("PID", ui),
+        bold("Workspace", ui),
+        proxyDivider,
+        {
+          content: bold("Proxies", ui),
+          colSpan: proxyColumns.length,
+        },
+        proxyDivider,
+        bold("Switches", ui),
+      ],
+      [
+        "",
+        "",
+        "",
+        "",
+        proxyDivider,
+        ...proxyColumns.map((name) => centerCell(bold(name, ui))),
+        proxyDivider,
+        "",
+      ],
+    ];
 
-    const w1 = Math.min(14, Math.floor(tw * 0.18));
-    const w4 = Math.min(28, Math.floor(tw * 0.28));
-    const w5 = Math.max(12, tw - 62);
-
-    const dataRows: string[][] = [];
+    const dataRows: TableCell[][] = [];
     for (const r of filtered) {
+      const hasSwitches = hasSwitchablesForRun(r, registry);
+      const unresolved = routes.some(
+        (route) =>
+          route.targetWorktree === r.worktree &&
+          r.proxies[route.proxyName] !== undefined &&
+          route.unresolved
+      );
+      const rowUi: CliUiOptions = {
+        color: useColor && (r.running || unresolved),
+      };
       const status = r.running
-        ? useColor
-          ? "\x1b[32m● running\x1b[0m"
-          : "running"
-        : useColor
-          ? "\x1b[2m○ stopped\x1b[0m"
-          : "stopped";
-      const proxyCols = Object.entries(r.proxies)
-        .map(([k, e]) => `${k}:${e.port}`)
-        .join(" ");
+        ? `${statusIcon(unresolved ? "warn" : "running", ui)} ${unresolved ? "needs target" : "running"}`
+        : `${statusIcon("stopped", ui)} stopped`;
+      const switchText = hasSwitches
+        ? unresolved
+          ? rowUi.color
+            ? "\x1b[33myes\x1b[0m"
+            : "yes"
+          : "yes"
+        : "no";
       dataRows.push([
-        r.runId.slice(0, 10),
+        r.running ? r.runId.slice(0, 10) : muted(r.runId.slice(0, 10), ui),
         status,
-        String(r.rootPid),
-        `${r.workspace}/${r.worktree}`,
-        proxyCols,
+        r.running ? String(r.rootPid) : muted(String(r.rootPid), ui),
+        r.running
+          ? `${r.workspace}/${r.worktree}`
+          : muted(`${r.workspace}/${r.worktree}`, ui),
+        plainCell(proxyDivider),
+        ...proxyColumns.map((name) => {
+          if (name === "-") {
+            return centerCell(r.running ? name : muted(name, ui));
+          }
+          const port = r.proxies[name]?.port;
+          const value = port === undefined ? "-" : String(port);
+          return centerCell(r.running ? value : muted(value, ui));
+        }),
+        plainCell(proxyDivider),
+        hasSwitches && unresolved
+          ? switchText
+          : r.running
+            ? switchText
+            : muted(switchText, ui),
       ]);
     }
 
-    const tableRows = [head, ...dataRows];
     process.stdout.write(
-      `${table(tableRows, {
-        border: getBorderCharacters("norc"),
-        columns: [
-          { width: w1, wrapWord: true },
-          { width: 12, wrapWord: true },
-          { width: 8, wrapWord: true },
-          { width: w4, wrapWord: true },
-          { width: w5, wrapWord: true },
+      `${bold(`orchport list  ${filtered.length} runs`, ui)}\n`
+    );
+    process.stdout.write(
+      `${formatHumanTable({
+        headers,
+        rows: dataRows,
+        columnWidths: [
+          runWidth,
+          statusWidth,
+          pidWidth,
+          workspaceWidth,
+          1,
+          ...proxyWidths,
+          1,
+          switchesWidth,
         ],
+        useColor,
       })}\n`
     );
+    if (routes.length > 0) {
+      process.stdout.write(`${bold("Switchable", ui)}\n`);
+      for (const route of routes) {
+        process.stdout.write(formatRouteLine(route, ui));
+      }
+    }
+    if (filtered.some((r) => !r.running)) {
+      process.stdout.write(
+        `\n${formatNextLine("remove stale entries with `orchport kill --stale`.", ui)}`
+      );
+    }
   },
 });
