@@ -4,17 +4,9 @@ import { define } from "gunshi";
 import { deleteRunState, listRunStates } from "../state/store.ts";
 import { ErrorCode, OrchportError } from "../utils/errors.ts";
 import { pickBoolean, pickString, pickStringArray } from "../utils/pick.ts";
+import { pidAlive } from "../utils/process.ts";
 
 const log = getLogger(["orchport", "kill"]);
-
-const pidAlive = (pid: number): boolean => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-};
 
 const isSignal = (s: string): s is NodeJS.Signals =>
   s === "SIGTERM" || s === "SIGKILL" || s === "SIGINT" || s === "SIGHUP";

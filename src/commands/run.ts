@@ -1,5 +1,3 @@
-import { randomBytes } from "node:crypto";
-
 import { getLogger } from "@logtape/logtape";
 import { define } from "gunshi";
 
@@ -23,6 +21,7 @@ import type { RunStateFile } from "../state/types.ts";
 import { isNestedOrchportMarker } from "../utils/env-keys.ts";
 import { ErrorCode, OrchportError } from "../utils/errors.ts";
 import { pickBoolean, pickString, pickStringArray } from "../utils/pick.ts";
+import { newRunId } from "../utils/run-id.ts";
 import { entryKeyToEnvPrefix } from "../utils/snake.ts";
 import { tryReexecWithSudo } from "../utils/sudo-reexec.ts";
 import {
@@ -35,8 +34,6 @@ const log = getLogger(["orchport", "run"]);
 
 /** Prevents infinite sudo re-exec loops when `--elevate` is used. */
 const ORCHPORT_ELEVATED_RUN = "ORCHPORT_ELEVATED_RUN";
-
-const newRunId = (): string => randomBytes(8).toString("hex");
 
 const reexecRunWithSudo = (): void => {
   tryReexecWithSudo(ORCHPORT_ELEVATED_RUN);

@@ -1,22 +1,23 @@
 /**
  * In-process reverse proxy + optional privileged HTTPS listener (`orchport run` default path).
  */
-import { existsSync } from "node:fs";
-
 import { getLogger } from "@logtape/logtape";
 
 import type { LoadedConfig } from "../config/schema.ts";
 import { buildLocalProxyHost } from "../core/local-proxy-host.ts";
 import type { ResolvedSession } from "../core/resolve-session.ts";
-import { ErrorCode, OrchportError } from "../utils/errors.ts";
 import { pickBoolean } from "../utils/pick.ts";
-import { generateDevSelfSignedTlsSync } from "./dev-tls.ts";
 import {
   startReverseProxy,
   tryStartReverseProxyPort,
-  type ProxyTls,
   type SwitchRoutingContext,
 } from "./server.ts";
+import {
+  isValidTcpPort,
+  resolveProxyTlsMaterial,
+  selectExtraProxyPort,
+  toProxyTls,
+} from "./tls-material.ts";
 import {
   patchBuiltinProxyUrlsToHttp,
   patchBuiltinProxyUrlsToHttpsMainPort,
@@ -24,42 +25,6 @@ import {
 } from "./url-patch.ts";
 
 const log = getLogger(["orchport", "run", "proxy"]);
-
-const assertTlsFilesExist = (tls: {
-  cert: string;
-  key: string;
-  ca?: string;
-}): void => {
-  const pairs: [string, string][] = [
-    ["cert", tls.cert],
-    ["key", tls.key],
-  ];
-  if (tls.ca) {
-    pairs.push(["ca", tls.ca]);
-  }
-  for (const [label, p] of pairs) {
-    if (!existsSync(p)) {
-      throw new OrchportError(
-        ErrorCode.CONFIG_TLS_FILE,
-        `proxy.tls.${label}: file not found: ${p}`,
-        {
-          hint: "Set paths relative to the config file or use absolute paths; files must exist before `orchport run`.",
-          context: { label, path: p },
-        }
-      );
-    }
-  }
-};
-
-const toProxyTls = (tls: {
-  cert: string;
-  key: string;
-  ca?: string;
-}): ProxyTls => ({
-  cert: Bun.file(tls.cert),
-  key: Bun.file(tls.key),
-  ...(tls.ca ? { ca: Bun.file(tls.ca) } : {}),
-});
 
 export type StartInProcessProxyOptions = {
   childEnv: Record<string, string | undefined>;
@@ -95,29 +60,24 @@ export const startInProcessLocalProxy = (
 
   const proxyStops: Array<() => void> = [];
   let devTlsCleanup: (() => void) | null = null;
-  const tlsCfg = config.proxy?.tls;
   let fileTls: { cert: string; key: string; ca?: string } | undefined;
 
   if (session.proxyPort === undefined || routes.size === 0) {
     return { proxyStops, devTlsCleanup, fileTls };
   }
 
-  if (tlsCfg === "dev") {
-    const hostnames = Object.keys(session.proxies).map((name) =>
-      buildLocalProxyHost(
-        name,
-        session.worktreeHostPrefix,
-        session.sld,
-        session.tld
-      )
-    );
+  {
+    const material = resolveProxyTlsMaterial({
+      config,
+      sld: session.sld,
+      tld: session.tld,
+      worktreeHostPrefix: session.worktreeHostPrefix,
+    });
+    devTlsCleanup = material.devTlsCleanup;
+    fileTls = material.fileTls;
+  }
+  if (config.proxy?.tls === "dev") {
     log.trace("Generating ephemeral dev TLS (openssl)");
-    const gen = generateDevSelfSignedTlsSync(hostnames);
-    devTlsCleanup = gen.cleanup;
-    fileTls = { cert: gen.certPath, key: gen.keyPath };
-  } else if (tlsCfg && typeof tlsCfg === "object") {
-    assertTlsFilesExist(tlsCfg);
-    fileTls = tlsCfg;
   }
 
   if (fileTls) {
@@ -175,24 +135,19 @@ export const startInProcessLocalProxy = (
     );
   }
 
-  const httpsPortOpt = config.proxy?.httpsPort;
-  let extraHttpsPort: number | undefined;
-  if (httpsPortOpt === false) {
+  const extraHttpsPort = selectExtraProxyPort({
+    httpsPort: config.proxy?.httpsPort,
+    tlsActive: fileTls !== undefined,
+  });
+  if (config.proxy?.httpsPort === false) {
     log.debug("Skipping extra listener (proxy.httpsPort: false)");
-  } else if (typeof httpsPortOpt === "number") {
-    extraHttpsPort = httpsPortOpt;
-  } else if (fileTls) {
-    extraHttpsPort = 443;
+  } else if (extraHttpsPort === 443 && fileTls) {
     log.debug(
       "Trying default extra HTTPS listener on port 443 (set proxy.httpsPort: false to skip, or a port number to override)"
     );
   }
 
-  if (
-    extraHttpsPort !== undefined &&
-    extraHttpsPort >= 1 &&
-    extraHttpsPort <= 65535
-  ) {
+  if (isValidTcpPort(extraHttpsPort)) {
     log.trace("Extra listener: port {port} tls={tls}", {
       port: String(extraHttpsPort),
       tls: String(Boolean(fileTls)),

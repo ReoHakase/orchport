@@ -7,6 +7,8 @@ import { createServer } from "node:net";
 import type { PortPickStrategy } from "../config/schema.ts";
 import { hashStable } from "../utils/hash.ts";
 
+export type PortProbe = (port: number) => Promise<boolean>;
+
 const tryListenPort = (port: number): Promise<boolean> =>
   new Promise((resolve) => {
     const s = createServer();
@@ -50,6 +52,7 @@ export const pickPortInRange = async (options: {
   max: number;
   avoid: ReadonlySet<number>;
   strategy?: PortPickStrategy;
+  probe?: PortProbe;
 }): Promise<number> => {
   const {
     sld,
@@ -59,6 +62,7 @@ export const pickPortInRange = async (options: {
     max,
     avoid,
     strategy = "deterministic",
+    probe = tryListenPort,
   } = options;
   if (min > max) {
     throw new Error(`Invalid port range: ${min}-${max}`);
@@ -77,7 +81,7 @@ export const pickPortInRange = async (options: {
     }
     /* Sequential probe: ports must be checked one at a time */
     /* eslint-disable-next-line no-await-in-loop */
-    if (await tryListenPort(p)) {
+    if (await probe(p)) {
       return p;
     }
   }

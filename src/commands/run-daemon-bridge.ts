@@ -7,11 +7,12 @@ import type { LoadedConfig } from "../config/schema.ts";
 import { applyDaemonEnvToChild } from "../core/daemon-env.ts";
 import type { ResolvedSession } from "../core/resolve-session.ts";
 import type { SwitchRoutingContext } from "../proxy/server.ts";
-import { pidAlive, readProxyDaemonState } from "../state/proxy-daemon.ts";
+import { readProxyDaemonState } from "../state/proxy-daemon.ts";
 import {
   deleteProxyRouteRegistration,
   writeProxyRouteRegistration,
 } from "../state/proxy-routes.ts";
+import { pidAlive } from "../utils/process.ts";
 import { applyProxyTlsCertToChildEnv } from "./run-tls-env.ts";
 
 export const applyDaemonProxyIfRunning = async (options: {

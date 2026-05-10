@@ -6,6 +6,7 @@ import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { isRecord } from "../utils/pick.ts";
+import { pidAlive } from "../utils/process.ts";
 import type { ProxyDaemonStateFile } from "./types.ts";
 import { getStateDir } from "./xdg.ts";
 
@@ -42,15 +43,6 @@ export const readProxyDaemonState = (): ProxyDaemonStateFile | null => {
     return raw;
   } catch {
     return null;
-  }
-};
-
-export const pidAlive = (pid: number): boolean => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
   }
 };
 

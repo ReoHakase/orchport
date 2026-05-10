@@ -17,10 +17,11 @@ import {
   type CliUiOptions,
 } from "../cli/format.ts";
 import { loadConfig } from "../config/load.ts";
-import { pidAlive, readProxyDaemonState } from "../state/proxy-daemon.ts";
+import { readProxyDaemonState } from "../state/proxy-daemon.ts";
 import { getStateDir } from "../state/xdg.ts";
 import { ErrorCode, OrchportError } from "../utils/errors.ts";
 import { pickBoolean, pickString } from "../utils/pick.ts";
+import { pidAlive } from "../utils/process.ts";
 
 const log = getLogger(["orchport", "doctor"]);
 

@@ -7,10 +7,10 @@ import { join } from "node:path";
 
 import { getLogger } from "@logtape/logtape";
 
-import { pidAlive } from "../state/proxy-daemon.ts";
 import { proxyRoutesDir } from "../state/proxy-routes.ts";
 import type { ProxyRouteRegistrationFile } from "../state/types.ts";
 import { isRecord } from "../utils/pick.ts";
+import { pidAlive } from "../utils/process.ts";
 import type { ProxyRouteResolver, SwitchRoutingContext } from "./server.ts";
 
 const log = getLogger(["orchport", "proxy", "routes"]);

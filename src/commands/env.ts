@@ -1,5 +1,3 @@
-import { randomBytes } from "node:crypto";
-
 import { getLogger } from "@logtape/logtape";
 import { define } from "gunshi";
 
@@ -8,6 +6,7 @@ import { loadConfig } from "../config/load.ts";
 import { buildEnvByProxy, resolveSession } from "../core/resolve-session.ts";
 import { ErrorCode, OrchportError } from "../utils/errors.ts";
 import { pickBoolean, pickString, pickStringArray } from "../utils/pick.ts";
+import { newRunId } from "../utils/run-id.ts";
 import {
   splitEnvSections,
   writePerProxyEnvTables,
@@ -15,8 +14,6 @@ import {
 } from "./env-table.ts";
 
 const log = getLogger(["orchport", "env"]);
-
-const newRunId = (): string => randomBytes(8).toString("hex");
 
 const shellQuote = (s: string): string => {
   if (!/[^\w@%+=:,./-]/i.test(s)) {

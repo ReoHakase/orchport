@@ -2,7 +2,6 @@
  * Privileged long-lived reverse proxy (`orchport proxy up`).
  */
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 
 import { getLogger } from "@logtape/logtape";
@@ -14,20 +13,22 @@ import {
   formatCliSuccess,
 } from "../cli/format.ts";
 import { loadConfig } from "../config/load.ts";
-import { buildLocalProxyHost } from "../core/local-proxy-host.ts";
 import { resolveProxyIdentity } from "../core/proxy-identity.ts";
 import { pickPortInRange } from "../ports/allocate.ts";
-import { generateDevSelfSignedTlsSync } from "../proxy/dev-tls.ts";
 import { ProxyRouteWatcher } from "../proxy/route-watcher.ts";
 import {
   startReverseProxy,
   tryStartReverseProxyPort,
-  type ProxyTls,
 } from "../proxy/server.ts";
+import {
+  isValidTcpPort,
+  resolveProxyTlsMaterial,
+  selectExtraProxyPort,
+  toProxyTls,
+} from "../proxy/tls-material.ts";
 import {
   deleteProxyDaemonStateFile,
   isProxyDaemonRunning,
-  pidAlive,
   readProxyDaemonState,
   writeProxyDaemonState,
 } from "../state/proxy-daemon.ts";
@@ -35,6 +36,7 @@ import { proxyRoutesDir } from "../state/proxy-routes.ts";
 import type { ProxyDaemonStateFile } from "../state/types.ts";
 import { ErrorCode, OrchportError } from "../utils/errors.ts";
 import { pickBoolean, pickString } from "../utils/pick.ts";
+import { pidAlive } from "../utils/process.ts";
 import {
   normalizeProcessArgv,
   tryReexecWithSudo,
@@ -47,42 +49,6 @@ const ORCHPORT_ELEVATED_PROXY = "ORCHPORT_ELEVATED_PROXY";
 
 const sleep = (ms: number): Promise<void> =>
   new Promise((r) => setTimeout(r, ms));
-
-const toProxyTls = (tls: {
-  cert: string;
-  key: string;
-  ca?: string;
-}): ProxyTls => ({
-  cert: Bun.file(tls.cert),
-  key: Bun.file(tls.key),
-  ...(tls.ca ? { ca: Bun.file(tls.ca) } : {}),
-});
-
-const assertTlsFilesExist = (tls: {
-  cert: string;
-  key: string;
-  ca?: string;
-}): void => {
-  const pairs: [string, string][] = [
-    ["cert", tls.cert],
-    ["key", tls.key],
-  ];
-  if (tls.ca) {
-    pairs.push(["ca", tls.ca]);
-  }
-  for (const [label, p] of pairs) {
-    if (!existsSync(p)) {
-      throw new OrchportError(
-        ErrorCode.CONFIG_TLS_FILE,
-        `proxy.tls.${label}: file not found: ${p}`,
-        {
-          hint: "Paths are resolved relative to the config file.",
-          context: { label, path: p },
-        }
-      );
-    }
-  }
-};
 
 /** Poll until `daemon.json` reflects the spawned child PID or the child dies / timeout. */
 const waitForDaemonReady = async (
@@ -273,29 +239,18 @@ export const proxyCommand = define({
       avoid: new Set(),
     });
 
-    const tlsCfg = config.proxy?.tls;
-    let fileTls: { cert: string; key: string; ca?: string } | undefined;
-    let devTlsCleanup: (() => void) | null = null;
-    if (tlsCfg === "dev") {
-      const hostnames = Object.keys(config.proxies).map((name) =>
-        buildLocalProxyHost(name, id.worktreeHostPrefix, id.sld, id.tld)
-      );
-      const gen = generateDevSelfSignedTlsSync(hostnames);
-      devTlsCleanup = gen.cleanup;
-      fileTls = { cert: gen.certPath, key: gen.keyPath };
-    } else if (tlsCfg && typeof tlsCfg === "object") {
-      assertTlsFilesExist(tlsCfg);
-      fileTls = tlsCfg;
-    }
-
-    let extraHttpsPort: number | undefined;
-    const httpsPortOpt = config.proxy?.httpsPort;
-    if (httpsPortOpt === false) {
+    const { fileTls, devTlsCleanup } = resolveProxyTlsMaterial({
+      config,
+      sld: id.sld,
+      tld: id.tld,
+      worktreeHostPrefix: id.worktreeHostPrefix,
+    });
+    const extraHttpsPort = selectExtraProxyPort({
+      httpsPort: config.proxy?.httpsPort,
+      tlsActive: fileTls !== undefined,
+    });
+    if (config.proxy?.httpsPort === false) {
       log.debug("Skipping extra listener (proxy.httpsPort: false)");
-    } else if (typeof httpsPortOpt === "number") {
-      extraHttpsPort = httpsPortOpt;
-    } else if (fileTls) {
-      extraHttpsPort = 443;
     }
 
     const privilegedExtra =
@@ -384,11 +339,7 @@ export const proxyCommand = define({
 
     let httpsPort: number | null = null;
 
-    if (
-      extraHttpsPort !== undefined &&
-      extraHttpsPort >= 1 &&
-      extraHttpsPort <= 65535
-    ) {
+    if (isValidTcpPort(extraHttpsPort)) {
       const extraTls = fileTls ? toProxyTls(fileTls) : undefined;
       const extraResult = tryStartReverseProxyPort({
         port: extraHttpsPort,

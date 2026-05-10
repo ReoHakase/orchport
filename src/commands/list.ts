@@ -15,21 +15,13 @@ import { formatHumanTable } from "../cli/human-table.ts";
 import { listRunStates } from "../state/store.ts";
 import { readSwitchRegistry } from "../state/switch-registry.ts";
 import { pickBoolean, pickString } from "../utils/pick.ts";
+import { pidAlive } from "../utils/process.ts";
 import {
   formatSwitchableRoutes,
   hasSwitchablesForRun,
 } from "./switchable-output.ts";
 
 const log = getLogger(["orchport", "list"]);
-
-const pidAlive = (pid: number): boolean => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-};
 
 const proxyNamesForRows = (
   rows: ReadonlyArray<{ proxies: Record<string, unknown> }>

@@ -4,7 +4,11 @@
 import { getLogger } from "@logtape/logtape";
 
 import type { PortPickStrategy, ProxyConfig } from "../config/schema.ts";
-import { isLocalPortFree, pickPortInRange } from "../ports/allocate.ts";
+import {
+  isLocalPortFree,
+  pickPortInRange,
+  type PortProbe,
+} from "../ports/allocate.ts";
 import { ErrorCode, OrchportError } from "../utils/errors.ts";
 
 const log = getLogger(["orchport", "resolve", "port"]);
@@ -17,8 +21,18 @@ export const pickEntryPort = async (options: {
   used: Set<number>;
   sld: string;
   worktree: string;
+  probe?: PortProbe;
 }): Promise<number> => {
-  const { name, ec, pMin, pMax, used, sld, worktree } = options;
+  const {
+    name,
+    ec,
+    pMin,
+    pMax,
+    used,
+    sld,
+    worktree,
+    probe = isLocalPortFree,
+  } = options;
   const { range, strategy, strict } = ec;
 
   const pickIn = (min: number, max: number, strat: PortPickStrategy) =>
@@ -30,6 +44,7 @@ export const pickEntryPort = async (options: {
       max,
       avoid: used,
       strategy: strat,
+      probe,
     });
 
   if (range === "auto") {
@@ -55,7 +70,7 @@ export const pickEntryPort = async (options: {
       );
     }
     /* eslint-disable-next-line no-await-in-loop */
-    if (await isLocalPortFree(p)) {
+    if (await probe(p)) {
       log.debug("Entry {name} fixed port {port}", { name, port: String(p) });
       return p;
     }
