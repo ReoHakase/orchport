@@ -6,6 +6,8 @@
 
 このドキュメントは、その CLI が扱う **典型的な monorepo・マルチプロセス開発**の一例として、本リポジトリ（Bun + Turbo + portless 併用）の構成を整理したものである。実装名が `portless` であっても、**サブドメイン付き HTTPS とプロキシ先ポートの分離**という目的は orchport と同系統として読み替えられる。
 
+**（任意）長寿命プロキシ**: 標準は `orchport run` がプロセス内でリバースプロキシを立ち上げる。特権ポートや単一プロキシを常駐させたい場合は **`sudo orchport proxy up`**（`mode: local-proxy`）、停止は **`orchport proxy down`**、状態は **`orchport proxy status`**。
+
 ---
 
 ## Monorepo のディレクトリ構成
@@ -75,7 +77,7 @@ worktree や agent ごとに **ベースドメインやポートをずらす**�
 | `TURSO_DATABASE_URL`       | libSQL / Turso（例では `db.*.localhost`）                       |
 | `PORT`                     | API の実 listen ポート                                          |
 
-**TLS / CA**: `packages/db` のスクリプト等では `NODE_EXTRA_CA_CERTS` を `~/.portless/ca.pem` にフォールバックする例がある。orchport の **`orchport run`**（プロキシが TLS のとき）は子プロセスに **`ORCHPORT_DEV_TLS_CERT_FILE`**（サーバ証明書 PEM のパス）を渡し、親で未設定なら **`NODE_EXTRA_CA_CERTS`**（Node/Bun）と **`DENO_CERT`**（Deno）も同じ PEM に設定する。`orchport env` だけでは PEM が無いのでこれらは出ない。社内 CA と併用する場合は既存の `NODE_EXTRA_CA_CERTS` / `DENO_CERT` は上書きされないため、手動マージが必要。
+**TLS / CA**: `packages/db` のスクリプト等では `NODE_EXTRA_CA_CERTS` を `~/.portless/ca.pem` にフォールバックする例がある。orchport の **`orchport run`**（プロキシが TLS のとき）は子プロセスに **`ORCHPORT_DEV_TLS_CERT_FILE`**（サーバ証明書 PEM のパス）を渡し、親で未設定なら **`NODE_EXTRA_CA_CERTS`**（Node/Bun）と **`DENO_CERT`**（Deno）も同じ PEM に設定する。`orchport env` だけでは PEM が無いのでこれらは出ない。社内 CA と併用する場合は既存の `NODE_EXTRA_CA_CERTS` / `DENO_CERT` は上書きされないため、手動マージが必要。追加の標準 HTTPS ポートがバインドできず **`ORCHPORT_*_URL`** がメイン TLS ポートに書き換わるとき、`env` で **`${entries.*.url}` と同一文字列だった値**（例: `TURSO_DATABASE_URL`）も **`run` が同じ新しい URL に追従**する（カスタム `url` 関数は対象外）。
 
 ---
 

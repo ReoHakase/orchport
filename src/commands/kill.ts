@@ -2,7 +2,7 @@ import { getLogger } from "@logtape/logtape";
 import { define } from "gunshi";
 
 import { deleteRunState, listRunStates } from "../state/store.ts";
-import { OrchportError } from "../utils/errors.ts";
+import { ErrorCode, OrchportError } from "../utils/errors.ts";
 import { pickBoolean, pickString, pickStringArray } from "../utils/pick.ts";
 
 const log = getLogger(["orchport", "kill"]);
@@ -77,7 +77,14 @@ export const killCommand = define({
     if (runIdVal) {
       const r = rows.find((x) => x.runId === runIdVal);
       if (!r) {
-        throw new OrchportError("KILL", `Unknown run id ${runIdVal}`);
+        throw new OrchportError(
+          ErrorCode.KILL_NOT_FOUND,
+          `Unknown run id ${runIdVal}`,
+          {
+            hint: "Run `orchport list` to see recorded run ids.",
+            context: { runId: runIdVal },
+          }
+        );
       }
       if (pidAlive(r.rootPid)) {
         log.info("kill: runId {id} rootPid {pid} signal {sig}", {
@@ -112,8 +119,11 @@ export const killCommand = define({
     const targets = pickStringArray(values, "target") ?? [];
     if (targets.length === 0) {
       throw new OrchportError(
-        "KILL",
-        "Specify a target, or use --all / --stale / --run-id / --pid"
+        ErrorCode.KILL_USAGE,
+        "Specify a target, or use --all / --stale / --run-id / --pid",
+        {
+          hint: "Example: `orchport kill web` or `orchport kill --run-id <id>`.",
+        }
       );
     }
 
@@ -121,18 +131,25 @@ export const killCommand = define({
       if (/^\d+$/.test(t)) {
         const port = Number(t);
         const match = rows.find((r) =>
-          Object.values(r.entries).some((e) => e.port === port)
+          Object.values(r.proxies).some((e) => e.port === port)
         );
         if (!match) {
           if (pickBoolean(values, "force") !== true) {
             throw new OrchportError(
-              "KILL",
-              `No orchport run owns port ${port} (use --force not implemented for foreign PIDs)`
+              ErrorCode.KILL_NOT_FOUND,
+              `No orchport run owns port ${port}`,
+              {
+                hint: "Only ports allocated by a recorded orchport run can be targeted; foreign processes are not killed yet.",
+                context: { port: String(port) },
+              }
             );
           }
           throw new OrchportError(
-            "KILL",
-            "--force for non-orchport ports is not implemented yet"
+            ErrorCode.KILL_UNSUPPORTED,
+            "--force for non-orchport ports is not implemented yet",
+            {
+              hint: "Stop the process listening on that port manually (e.g. activity Monitor / lsof / kill).",
+            }
           );
         }
         if (pidAlive(match.rootPid)) {
@@ -150,7 +167,7 @@ export const killCommand = define({
         continue;
       }
 
-      const byEntry = rows.filter((r) => r.entries[t] !== undefined);
+      const byEntry = rows.filter((r) => r.proxies[t] !== undefined);
       if (byEntry.length === 0) {
         const byId = rows.filter((r) => r.runId.startsWith(t));
         if (byId.length === 1 && pidAlive(byId[0].rootPid)) {
@@ -161,7 +178,14 @@ export const killCommand = define({
           sendSignal(byId[0].rootPid, sig);
           continue;
         }
-        throw new OrchportError("KILL", `No run matched target ${t}`);
+        throw new OrchportError(
+          ErrorCode.KILL_NOT_FOUND,
+          `No run matched target ${t}`,
+          {
+            hint: "Use an entry name, port number, run id prefix, or `orchport list`.",
+            context: { target: t },
+          }
+        );
       }
       const r = byEntry[0];
       if (pidAlive(r.rootPid)) {

@@ -1,6 +1,6 @@
 /**
  * @module orchport/proxy/server
- * Local reverse proxy (Host header → 127.0.0.1:entryPort); optional TLS; optional path-based switch routing.
+ * Local reverse proxy (Host header → 127.0.0.1:port); optional TLS; optional path-based switch routing.
  */
 import { getLogger } from "@logtape/logtape";
 
@@ -23,16 +23,112 @@ export type ProxyServer = {
   stop: () => void;
 };
 
-/** When set, paths matching `switchable` may proxy to another worktree's entry port (see switches.json). */
+/** Result of attempting the optional extra listener (e.g. port 443). */
+export type TryExtraProxyResult =
+  | { ok: true; server: ProxyServer }
+  | { ok: false; errnoCode?: string };
+
+const errnoFromUnknown = (err: unknown): string | undefined => {
+  if (typeof err !== "object" || err === null || !("code" in err)) {
+    return undefined;
+  }
+  const code = Reflect.get(err, "code");
+  return typeof code === "string" ? code : undefined;
+};
+
+/** When set, paths matching configured `switchables` may proxy to another worktree's port (see switches.json). */
 export type SwitchRoutingContext = {
   hostToEntry: ReadonlyMap<string, string>;
-  entrySwitchable: ReadonlyMap<string, readonly string[]>;
+  proxySwitchables: ReadonlyMap<string, readonly string[]>;
   sld: string;
   tld: string;
   worktree: string;
 };
 
-const createProxyFetch =
+/** Dynamic routes + optional per-host switch routing (daemon merges route files). */
+export type ProxyRouteResolver = {
+  getRoutes: () => ReadonlyMap<string, number>;
+  getSwitchRoutingForHost: (
+    hostLower: string
+  ) => SwitchRoutingContext | undefined;
+};
+
+const createResolverProxyFetch =
+  (resolver: ProxyRouteResolver) =>
+  async (req: Request): Promise<Response> => {
+    const routes = resolver.getRoutes();
+    const rawHost = req.headers.get("host") ?? "";
+    const host = rawHost.split(":")[0]?.toLowerCase() ?? "";
+    const defaultPort = routes.get(host);
+    if (defaultPort === undefined) {
+      log.warning("No route for host {host}", { host });
+      return new Response(`orchport: unknown host ${host}`, { status: 404 });
+    }
+    const u = new URL(req.url);
+    const pathname = u.pathname;
+
+    let targetPort = defaultPort;
+    const sr = resolver.getSwitchRoutingForHost(host);
+    if (sr !== undefined) {
+      const entryName = sr.hostToEntry.get(host);
+      const patterns = entryName
+        ? sr.proxySwitchables.get(entryName)
+        : undefined;
+      if (entryName && patterns !== undefined && patterns.length > 0) {
+        const matched = patterns.find((pattern) =>
+          pathnameMatchesSwitchPattern(pathname, pattern)
+        );
+        if (matched !== undefined) {
+          const key = buildSwitchRegistryKey(
+            sr.sld,
+            sr.tld,
+            entryName,
+            matched
+          );
+          const reg = await readSwitchRegistry();
+          const slot = reg.entries[key];
+          const targetWt = slot?.targetWorktree;
+          if (targetWt !== undefined && targetWt !== sr.worktree) {
+            const rp = await resolveSwitchTargetPort(targetWt, entryName);
+            if (rp === null) {
+              log.warning(
+                "switch: no run state for worktree={wt} entry={entry} key={key}",
+                { wt: targetWt, entry: entryName, key }
+              );
+              return new Response(
+                `orchport: switch target not running (worktree ${targetWt}, entry ${entryName})`,
+                { status: 502 }
+              );
+            }
+            targetPort = rp;
+            log.trace("proxy: path switch key={key} -> 127.0.0.1:{port}", {
+              key,
+              port: String(rp),
+            });
+          }
+        }
+      }
+    }
+
+    log.trace("proxy: {method} host={host} -> 127.0.0.1:{port}{path}", {
+      method: req.method,
+      host,
+      port: String(targetPort),
+      path: `${pathname}${u.search}`,
+    });
+    const target = `http://127.0.0.1:${targetPort}${pathname}${u.search}`;
+    const headers = new Headers(req.headers);
+    headers.set("host", `127.0.0.1:${targetPort}`);
+    return fetch(target, {
+      method: req.method,
+      headers,
+      body:
+        req.method === "GET" || req.method === "HEAD" ? undefined : req.body,
+      redirect: "manual",
+    });
+  };
+
+const createStaticProxyFetch =
   (routes: ReadonlyMap<string, number>, switchRouting?: SwitchRoutingContext) =>
   async (req: Request): Promise<Response> => {
     const rawHost = req.headers.get("host") ?? "";
@@ -50,7 +146,7 @@ const createProxyFetch =
     if (sr !== undefined) {
       const entryName = sr.hostToEntry.get(host);
       const patterns = entryName
-        ? sr.entrySwitchable.get(entryName)
+        ? sr.proxySwitchables.get(entryName)
         : undefined;
       if (entryName && patterns !== undefined && patterns.length > 0) {
         const matched = patterns.find((pattern) =>
@@ -111,6 +207,8 @@ export type StartReverseProxyOptions = {
   routes: ReadonlyMap<string, number>;
   tls?: ProxyTls;
   switchRouting?: SwitchRoutingContext;
+  /** When set (daemon), overrides static `routes` / `switchRouting`. */
+  routeResolver?: ProxyRouteResolver;
 };
 
 /**
@@ -119,7 +217,10 @@ export type StartReverseProxyOptions = {
 export const startReverseProxy = (
   options: StartReverseProxyOptions
 ): ProxyServer => {
-  const fetch = createProxyFetch(options.routes, options.switchRouting);
+  const fetch =
+    options.routeResolver !== undefined
+      ? createResolverProxyFetch(options.routeResolver)
+      : createStaticProxyFetch(options.routes, options.switchRouting);
   const server = Bun.serve({
     port: options.port,
     hostname: "127.0.0.1",
@@ -140,14 +241,17 @@ export const startReverseProxy = (
 };
 
 /**
- * Best-effort extra listener (e.g. port 443). Returns null if bind fails (EACCES, EADDRINUSE, etc.).
+ * Best-effort extra listener (e.g. port 443).
  * Uses TLS when `tls` is set; otherwise plain HTTP.
  */
 export const tryStartReverseProxyPort = (
   options: StartReverseProxyOptions
-): ProxyServer | null => {
+): TryExtraProxyResult => {
   try {
-    const fetch = createProxyFetch(options.routes, options.switchRouting);
+    const fetch =
+      options.routeResolver !== undefined
+        ? createResolverProxyFetch(options.routeResolver)
+        : createStaticProxyFetch(options.routes, options.switchRouting);
     const server = Bun.serve({
       port: options.port,
       hostname: "127.0.0.1",
@@ -161,8 +265,11 @@ export const tryStartReverseProxyPort = (
       { port: String(options.port) }
     );
     return {
-      stop: () => {
-        server.stop();
+      ok: true,
+      server: {
+        stop: () => {
+          server.stop();
+        },
       },
     };
   } catch (err) {
@@ -171,6 +278,6 @@ export const tryStartReverseProxyPort = (
       port: String(options.port),
       msg,
     });
-    return null;
+    return { ok: false, errnoCode: errnoFromUnknown(err) };
   }
 };

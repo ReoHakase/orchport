@@ -6,24 +6,40 @@ export default defineConfig({
   tld: "test",
   sld: "myapp",
   mode: "local-proxy",
-  entries: {
-    web: { range: [3000, 3999], strategy: "smaller", strict: true },
+  proxies: {
+    web: {
+      range: [3000, 3999],
+      strategy: "smaller",
+      strict: true,
+      env: {
+        // PORT: "${web.port}", // automatically assigned
+        API_URL: "${api.url}",
+      },
+    },
     api: {
       range: [8000, 8999],
       strategy: "larger",
-      switchable: "/auth/callback/*",
+      switchables: ["/auth/callback/*"],
+      env: {
+        // PORT: "${api.port}", // automatically assigned
+        DB_URL: "${db.url}",
+        EMAIL_URL: "${email.url}",
+      },
     },
     db: { range: [6000, 6999], strategy: "deterministic" },
     email: { range: [10_000, 10_999] },
-    storybook: true,
+    storybook: {
+      env: {
+        // PORT: "${storybook.port}", // automatically assigned
+      },
+    },
   },
   env: {
+    TRUSTED_ORIGINS: "${web.url},${api.url}",
     APP_BASE_URL: "${web.url}",
     NEXT_PUBLIC_API_BASE_URL: "${api.url}",
     API_PUBLIC_URL: "${api.url}",
     BETTER_AUTH_URL: "${api.url}",
-    TRUSTED_ORIGINS: "${web.url}",
-    CORS_ORIGIN: "${web.url}",
     TURSO_DATABASE_URL: "${db.url}",
   },
 });

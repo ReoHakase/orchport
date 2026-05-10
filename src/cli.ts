@@ -8,6 +8,7 @@ import { globalOptionsPlugin } from "./commands/global-plugin.ts";
 import { initCommand } from "./commands/init.ts";
 import { killCommand } from "./commands/kill.ts";
 import { listCommand } from "./commands/list.ts";
+import { proxyCommand } from "./commands/proxy.ts";
 import { runCommand } from "./commands/run.ts";
 import { switchCommand } from "./commands/switch.ts";
 import { packageVersion } from "./core/version.ts";
@@ -44,6 +45,7 @@ export const runCli = (argv: string[]): Promise<string | undefined> => {
       kill: killCommand,
       doctor: doctorCommand,
       switch: switchCommand,
+      proxy: proxyCommand,
     },
     plugins: [globalOptionsPlugin],
   });

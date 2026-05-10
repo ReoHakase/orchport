@@ -56,5 +56,11 @@ export const globalOptionsPlugin = plugin({
         "Take over path switch slots owned by another worktree (orchport run only)",
       default: false,
     });
+    ctx.addGlobalOption("json", {
+      type: "boolean",
+      description:
+        "Print errors as JSON on stderr (machine-readable; friendly for scripts and agents)",
+      default: false,
+    });
   },
 });

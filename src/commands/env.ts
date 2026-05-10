@@ -4,9 +4,9 @@ import { getLogger } from "@logtape/logtape";
 import { define } from "gunshi";
 
 import { loadConfig } from "../config/load.ts";
-import { resolveSession } from "../core/resolve-session.ts";
+import { buildEnvByProxy, resolveSession } from "../core/resolve-session.ts";
 import { pickBoolean, pickString } from "../utils/pick.ts";
-import { writeEnvTable } from "./env-table.ts";
+import { writePerProxyEnvTables } from "./env-table.ts";
 
 const log = getLogger(["orchport", "env"]);
 
@@ -20,7 +20,7 @@ const shellQuote = (s: string): string => {
 };
 
 /**
- * Print merged env: **default** is a [cli-table3](https://github.com/cli-table/cli-table3) table on a TTY; `KEY=value` when piped or with `--plain`. Use `--json`, `--shell`, or `--dotenv` for scripts.
+ * Print merged env: **default** on a TTY is one **Variable / Value** table per configured proxy (global `env` + standard `ORCHPORT_*` in each). `KEY=value` when piped or with `--plain`. Use `--json`, `--shell`, or `--dotenv` for scripts (single flat object, no `run` target — same as before).
  */
 export const envCommand = define({
   name: "env",
@@ -125,7 +125,7 @@ export const envCommand = define({
     const useTable = tty && !plainOut;
     if (useTable) {
       const useColor = process.env.NO_COLOR === undefined;
-      writeEnvTable(session.env, { useColor });
+      writePerProxyEnvTables(buildEnvByProxy(session, config), { useColor });
       return;
     }
     for (const [key, val] of Object.entries(session.env)) {

@@ -24,11 +24,12 @@ export const parseRunStateFile = (text: string): RunStateFile | null => {
   if (typeof raw.createdAt !== "string") {
     return null;
   }
-  if (!isRecord(raw.entries)) {
+  const proxyBlock = raw.proxies ?? raw.entries;
+  if (!isRecord(proxyBlock)) {
     return null;
   }
-  const entries: RunStateFile["entries"] = {};
-  for (const [k, v] of Object.entries(raw.entries)) {
+  const proxies: RunStateFile["proxies"] = {};
+  for (const [k, v] of Object.entries(proxyBlock)) {
     if (!isRecord(v)) {
       return null;
     }
@@ -39,7 +40,7 @@ export const parseRunStateFile = (text: string): RunStateFile | null => {
     ) {
       return null;
     }
-    entries[k] = { port: v.port, url: v.url, localUrl: v.localUrl };
+    proxies[k] = { port: v.port, url: v.url, localUrl: v.localUrl };
   }
   const proxyPort = raw.proxyPort;
   return {
@@ -56,7 +57,7 @@ export const parseRunStateFile = (text: string): RunStateFile | null => {
         : typeof raw.configPath === "string"
           ? raw.configPath
           : null,
-    entries,
+    proxies,
     proxyPort: typeof proxyPort === "number" ? proxyPort : undefined,
   };
 };

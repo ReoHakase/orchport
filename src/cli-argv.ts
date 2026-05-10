@@ -12,6 +12,7 @@ export const ORCHPORT_SUBCOMMAND_NAMES = new Set([
   "kill",
   "doctor",
   "switch",
+  "proxy",
 ]);
 
 const mergeGlobalStringOptionsInPrefix = (prefix: string[]): string[] => {

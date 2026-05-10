@@ -20,7 +20,7 @@ orchportはプロセスマネージャではなく、**実行前にport・URL・
 やらないことを明確にする。
 
 ```txt
-orchport up / down のような常駐型プロセスマネージャ
+任意コマンドを常時監督する `orchport up / down` 型のプロセスマネージャ（※ **`orchport proxy up/down`** はリバースプロキシ専用であり別物）
 interactive TUI
 sudo前提の443 bind
 /etc/hosts の自動編集
@@ -72,9 +72,10 @@ orchport list
 orchport kill
 orchport init
 orchport doctor
+orchport proxy up | down | status   # 任意: 特権ポート用の長寿命リバースプロキシ（通常は `run` 内蔵プロキシで十分）
 ```
 
-`orchport up` は作らない。
+常駐の **プロセスマネージャ**（`orchport up` で任意コマンドを常時監督）は作らない。`orchport proxy up` は **リバースプロキシだけ**を長寿命化し、`orchport run` はデーモンが動いていればルート登録のみに切り替わる。
 
 ---
 
@@ -886,16 +887,18 @@ orchport/
 
 次は **Phase 1〜3 のコア**が実装済み。Phase 4（Tailscale 等）は未着手。
 
-| 領域                                     | 状態 | メモ                                                                                                                                                                                                                                                        |
-| ---------------------------------------- | ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Phase 1 `run` / `env` / `init`           | 済   | Gunshi。設定探索・YAML/JSON/TS・Valibot。`orchport run -- cmd` で `-` 付き argv を渡す。                                                                                                                                                                    |
-| ネスト pass-through                      | 済   | `ORCHPORT=1` を標準とし、互換で `orchport=1` も受け入れる。                                                                                                                                                                                                 |
-| Phase 2 `list` / `kill` / `doctor`       | 済   | state は `ORCHPORT_STATE_DIR` または XDG。`doctor` は状態ディレクトリへプローブファイルで読み書き確認。zsh 補完は未実装。                                                                                                                                   |
-| Phase 3 ビルトイン `*.localhost` / proxy | 済   | 既定 URL はコード内規則。TS のみ任意 `url` 関数。`local-proxy` + `run` でリバースプロキシ（Bun）。                                                                                                                                                          |
-| 443 / sudo                               | 済   | `proxy.httpsPort` で追加 HTTP リスナを試行。`EACCES` / `EADDRINUSE` 等は warn のみで従来プロキシ継続（TLS なし）。                                                                                                                                          |
-| sandbox state フォールバック             | 済   | state 書き込み失敗時は記録スキップ + `ORCHPORT_VOLATILE_STATE=1` を子に渡す。                                                                                                                                                                               |
-| dev TLS → Node/Bun/Deno 信頼 PEM         | 済   | `run` でプロキシが TLS（`tls: dev` または PEM ファイル）のとき、子に `ORCHPORT_DEV_TLS_CERT_FILE` を注入。`NODE_EXTRA_CA_CERTS` / `DENO_CERT` は未設定時のみ同一 PEM パスを設定（既存値は上書きしない）。`orchport env` には出さない（実行時 PEM が無い）。 |
-| `bun build --compile`                    | 済   | `bun run build:compile` で単一バイナリ（`dist/orchport`）。既存 `build` はバンドルのみ。                                                                                                                                                                    |
+| 領域                                     | 状態 | メモ                                                                                                                                                                                                                                                                                                                  |
+| ---------------------------------------- | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Phase 1 `run` / `env` / `init`           | 済   | Gunshi。設定探索・YAML/JSON/TS・Valibot。`orchport run -- cmd` で `-` 付き argv を渡す。                                                                                                                                                                                                                              |
+| ネスト pass-through                      | 済   | `ORCHPORT=1` を標準とし、互換で `orchport=1` も受け入れる。                                                                                                                                                                                                                                                           |
+| Phase 2 `list` / `kill` / `doctor`       | 済   | state は `ORCHPORT_STATE_DIR` または XDG。`doctor` は状態ディレクトリへプローブファイルで読み書き確認。zsh 補完は未実装。                                                                                                                                                                                             |
+| Phase 3 ビルトイン `*.localhost` / proxy | 済   | 既定 URL はコード内規則。TS のみ任意 `url` 関数。`local-proxy` + `run` でリバースプロキシ（Bun）。オプションで **`orchport proxy up`** が長寿命プロキシ + `proxy/routes/*.json` の動的マージ（`run` はデーモン生存時はルート書き込みのみ）。                                                                          |
+| 構造化 CLI エラー                        | 済   | `OrchportError` は **`ErrorCode`** + `hint` + `context`。グローバル **`--json`** のとき致命的エラーは **stderr に JSON**（`orchportErrorToJson`）。人間向けは `src/cli/format.ts`。                                                                                                                                   |
+| `list` / `env` / `doctor` 出力           | 済   | `list` は TTY で **table** のステータス付き表（`--json` は配列のまま）。`orchport env` は TTY でプロキシごとの **table**（グローバル `env` と `ORCHPORT_*` を各セクションに表示）。`doctor` は項目ごとの ✓/✗ 行（config / state / openssl / proxy daemon）。                                                          |
+| 443 / sudo                               | 済   | `proxy.httpsPort` で追加リスナを試行。失敗は warn のみでメインプロキシ継続。Unix では `orchport … run --elevate -- …` で `sudo -E` 再実行を試す（`--elevate` は `run` の直後）。`bun build --compile` バイナリは `argv[0]` が `/$bunfs/…` のため `ORCHPORT_SUDO_ARGV0` に実パスを設定するか手動で `sudo orchport …`。 |
+| sandbox state フォールバック             | 済   | state 書き込み失敗時は記録スキップ + `ORCHPORT_VOLATILE_STATE=1` を子に渡す。                                                                                                                                                                                                                                         |
+| dev TLS → Node/Bun/Deno 信頼 PEM         | 済   | `run` でプロキシが TLS（`tls: dev` または PEM ファイル）のとき、子に `ORCHPORT_DEV_TLS_CERT_FILE` を注入。`NODE_EXTRA_CA_CERTS` / `DENO_CERT` は未設定時のみ同一 PEM パスを設定（既存値は上書きしない）。`orchport env` には出さない（実行時 PEM が無い）。                                                           |
+| `bun build --compile`                    | 済   | `bun run build:compile` で単一バイナリ（`dist/orchport`）。既存 `build` はバンドルのみ。                                                                                                                                                                                                                              |
 
 ---
 

@@ -6,19 +6,19 @@ import { define } from "gunshi";
 import { loadConfig } from "../config/load.ts";
 import { normalizeConfigTld } from "../config/tld.ts";
 import { setSwitchTargetsFromConfig } from "../state/switch-registry.ts";
-import { OrchportError } from "../utils/errors.ts";
+import { ErrorCode, OrchportError } from "../utils/errors.ts";
 import { getGitRepositoryBasename } from "../utils/git.ts";
 import { pickString } from "../utils/pick.ts";
 
 const log = getLogger(["orchport", "switch"]);
 
 /**
- * Update switches.json so all `switchable` paths in the current config target the given worktree.
+ * Update switches.json so all `switchables` paths in the current config target the given worktree.
  */
 export const switchCommand = define({
   name: "switch",
   description:
-    "Route switchable paths (see config entries) to a worktree without restarting the proxy",
+    "Route switchables paths (see config proxies) to a worktree without restarting the proxy",
   args: {
     targetWorktree: {
       type: "positional",
@@ -30,8 +30,11 @@ export const switchCommand = define({
     const slug = pickString(ctx.values, "targetWorktree")?.trim();
     if (slug === undefined || slug === "") {
       throw new OrchportError(
-        "USAGE",
-        "Usage: orchport switch <worktree-slug>"
+        ErrorCode.CLI_USAGE,
+        "Usage: orchport switch <worktree-slug>",
+        {
+          hint: "Example: `orchport switch feature-auth`",
+        }
       );
     }
     const config = await loadConfig({
@@ -53,12 +56,12 @@ export const switchCommand = define({
       sld,
       tld,
       targetWorktree: slug,
-      entries: config.entries,
+      proxies: config.proxies,
     });
     if (keys.length === 0) {
-      log.warning("switch: no switchable entries in config; nothing to update");
+      log.warning("switch: no switchables in config; nothing to update");
       process.stdout.write(
-        "No entry defines `switchable` paths; nothing updated.\n"
+        "No proxy defines `switchables` paths; nothing updated.\n"
       );
       return;
     }

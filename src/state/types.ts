@@ -7,7 +7,7 @@ export type RunStateFile = {
   mode: "local-port" | "local-proxy";
   createdAt: string;
   configPath: string | null;
-  entries: Record<
+  proxies: Record<
     string,
     {
       port: number;
@@ -31,7 +31,7 @@ export type PortsRegistryFile = {
   >;
 };
 
-/** Path-based routing: which worktree serves `switchable` paths for an entry. */
+/** Path-based routing: which worktree serves `switchables` paths for a proxy name. */
 export type SwitchRegistryFile = {
   version: 1;
   entries: Record<
@@ -42,4 +42,35 @@ export type SwitchRegistryFile = {
       lastRunId?: string;
     }
   >;
+};
+
+/** Written by `orchport proxy up` (privileged daemon). */
+export type ProxyDaemonStateFile = {
+  version: 1;
+  pid: number;
+  /** Main reverse proxy listener (high port, TLS when configured). */
+  mainPort: number;
+  /** Privileged extra HTTPS listener (e.g. 443), or null if bind failed / skipped. */
+  httpsPort: number | null;
+  tls: boolean;
+  /** PEM path for dev TLS or file TLS cert (optional). */
+  certPath: string | null;
+  startedAt: string;
+};
+
+/** One `orchport run` registration consumed by the daemon (`proxy/routes/<runId>.json`). */
+export type ProxyRouteRegistrationFile = {
+  version: 1;
+  runId: string;
+  pid: number;
+  routes: Record<string, number>;
+  switchRouting?: {
+    hostToEntry: Record<string, string>;
+    /** Serialized path-switch patterns per proxy name. */
+    proxySwitchables: Record<string, string[]>;
+    sld: string;
+    tld: string;
+    worktree: string;
+  };
+  createdAt: string;
 };

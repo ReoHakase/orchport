@@ -1,6 +1,6 @@
 /**
  * @module orchport/lib
- * Public surface for `orchport.config.ts`: `defineConfig` / `entry` and re-exported config types.
+ * Public surface for `orchport.config.ts`: `defineConfig` / `proxy` and re-exported config types.
  */
 import type {
   EnvFn,
@@ -11,18 +11,18 @@ import type {
 } from "./config/schema.ts";
 
 export type {
-  EntryConfig,
   EnvFn,
   PortPickStrategy,
+  ProxyConfig,
   RawConfig,
   RawConfigInput,
-  ResolvedEntryShape,
+  ResolvedProxyShape,
   UrlFn,
 } from "./config/schema.ts";
 
 /**
  * TypeScript config helper; returns the object unchanged at runtime.
- * Uses {@link RawConfigInput} so optional fields with Valibot defaults (`mode`, `sld`, `tld`, entry `range` / `strategy`, …) stay optional here.
+ * Uses {@link RawConfigInput} so optional fields with Valibot defaults stay optional here.
  */
 export const defineConfig = <
   const T extends RawConfigInput & {
@@ -33,16 +33,17 @@ export const defineConfig = <
   config: T
 ): T => config;
 
-/** Entry value: `true` or `{}` → defaults (`range: auto`, `strategy: deterministic`, `strict: false`). */
-export const entry = <
+/** Proxy value: `true` or `{}` → defaults (`range: auto`, `strategy: deterministic`, `strict: false`). */
+export const proxy = <
   const T extends
     | true
     | {
         range?: "auto" | readonly [number, number];
         strategy?: PortPickStrategy;
         strict?: boolean;
-        switchable?: string | readonly string[];
+        switchables?: readonly string[];
+        env?: Record<string, string | number | boolean | null>;
       },
 >(
-  e: T
-): T => e;
+  p: T
+): T => p;

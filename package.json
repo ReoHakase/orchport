@@ -27,8 +27,8 @@
   "dependencies": {
     "@logtape/logtape": "2.0.7",
     "@logtape/pretty": "2.0.7",
-    "cli-table3": "0.6.5",
     "gunshi": "0.29.5",
+    "table": "6.9.0",
     "valibot": "1.4.0",
     "yaml": "2.8.4"
   },

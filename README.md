@@ -17,15 +17,15 @@
 
 ## 主なコマンド
 
-| コマンド          | 役割                                                                                            |
-| ----------------- | ----------------------------------------------------------------------------------------------- |
-| `orchport run`    | 設定を読み、ポートと URL を解決。`local-proxy` ならリバースプロキシを立ててから子コマンドを実行 |
-| `orchport env`    | 解決結果のみ表示（JSON / テーブル / shell 向けなど）                                            |
-| `orchport list`   | 記録された run の一覧                                                                           |
-| `orchport kill`   | 記録に基づきプロセスへシグナル                                                                  |
-| `orchport doctor` | 状態ディレクトリの作成・読み書き試行と設定読み込みの簡易チェック                                |
-| `orchport init`   | 設定ファイルの雛形生成                                                                          |
-| `orchport switch` | `switchable` パスの向き先 worktree を更新（後述）                                               |
+| コマンド          | 役割                                                                                                                                                                                                 |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `orchport run`    | 設定を読み、ポートと URL を解決。`local-proxy` ならリバースプロキシを立ててから子コマンドを実行。`orchport run web -- cmd` のように先頭に **プロキシ名** を置くと、そのプロキシの `env` だけをマージ |
+| `orchport env`    | 解決結果のみ表示（TTY ではプロキシ別テーブル、JSON / plain / shell 向けなど）                                                                                                                        |
+| `orchport list`   | 記録された run の一覧                                                                                                                                                                                |
+| `orchport kill`   | 記録に基づきプロセスへシグナル                                                                                                                                                                       |
+| `orchport doctor` | 状態ディレクトリの作成・読み書き試行と設定読み込みの簡易チェック                                                                                                                                     |
+| `orchport init`   | 設定ファイルの雛形生成                                                                                                                                                                               |
+| `orchport switch` | `switchables` パスの向き先 worktree を更新（後述）                                                                                                                                                   |
 
 パススイッチ: OAuth コールバックなど、ホストは共通のまま特定パスだけ別 worktree のバックエンドへ振り分けられます。
 
@@ -49,7 +49,7 @@ orchport env --json
 orchport run -- turbo dev
 ```
 
-`run` で子に渡る例: `ORCHPORT_WEB_PORT` などエントリ単位の変数、`ORCHPORT_SLD` / `ORCHPORT_TLD` / `ORCHPORT_WORKTREE` など。
+`run` で子に渡る例: `ORCHPORT_WEB_PORT` などプロキシ単位の変数、`ORCHPORT_SLD` / `ORCHPORT_TLD` / `ORCHPORT_WORKTREE` など。
 
 設定ファイルはカレントから親へ向かって探索します。例: `orchport.config.ts`, `orchport.yaml`, `orchport.json`。
 
@@ -77,22 +77,22 @@ orchport run -- turbo dev
 | 固定ポートが埋まっている | `strict: true` → エラー。`strict: false`（既定）→ 警告のうえグローバル `portRange` へフォールバック                                                                                                |
 | 区間内に空きなし         | 同上。`strict: false` ならグローバル `portRange` へ、`true` ならエラー                                                                                                                             |
 
-## パススイッチ（`switchable`）
+## パススイッチ（`switchables`）
 
 > [!IMPORTANT]
 > [Better Auth](https://www.better-auth.com/) などで OAuth コールバックを扱う場合、リダイレクト先 URL はアプリ側で 1 本に決める必要があります。一方で Google や GitHub などの OAuth プロバイダーは、開発用クライアントに **登録できるコールバック URL が 1 つ** に限られることが多く、worktree ごとに別ホスト・別 URL を登録し直すのは現実的ではありません。
 >
 > そのため「公開 URL とコールバックパスは常に同じにしつつ、プロキシだけ別 worktree の API に切り替える」パススイッチが必要になります。
 
-`local-proxy` でプロキシを立てているとき、エントリに `switchable` を付けると、マッチしたパスだけ別 worktree の同じエントリ名の dev サーバーへ転送できます。
+`local-proxy` でプロキシを立てているとき、プロキシに **`switchables`**（文字列の配列）を付けると、マッチしたパスだけ別 worktree の同じプロキシ名の dev サーバーへ転送できます。
 
-| トピック                 | 説明                                                                                                                                                                   |
-| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| パターン                 | 完全一致 `/path` または末尾 `/prefix/*` のみ。`**` や途中の `*` は不可                                                                                                 |
-| 状態                     | `ORCHPORT_STATE_DIR` または XDG 下の `switches.json` にスロット所有者を記録                                                                                            |
-| `orchport run`           | `switchable` があると現在の worktree がスロットを claim。他が持っていればエラー。`--force-switch` で上書き                                                             |
-| `orchport switch <slug>` | 設定内の全 `switchable` スロットの向き先を指定 worktree に更新。プロキシ再起動は不要。ポートはその worktree＋エントリの最新 run 状態から。無ければ該当リクエストは 502 |
-| 振る舞い                 | 通常は Host でバックエンドを決め、パスが `switchable` に一致すると別ポートへ上書き転送                                                                                 |
+| トピック                 | 説明                                                                                                                                                                      |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| パターン                 | 完全一致 `/path` または末尾 `/prefix/*` のみ。`**` や途中の `*` は不可                                                                                                    |
+| 状態                     | `ORCHPORT_STATE_DIR` または XDG 下の `switches.json` にスロット所有者を記録                                                                                               |
+| `orchport run`           | `switchables` があると現在の worktree がスロットを claim。他が持っていればエラー。`--force-switch` で上書き                                                               |
+| `orchport switch <slug>` | 設定内の全 `switchables` スロットの向き先を指定 worktree に更新。プロキシ再起動は不要。ポートはその worktree＋プロキシ名の最新 run 状態から。無ければ該当リクエストは 502 |
+| 振る舞い                 | 通常は Host でバックエンドを決め、パスが `switchables` のいずれかに一致すると別ポートへ上書き転送                                                                         |
 
 ## 設定ファイル（ルート）
 
@@ -104,15 +104,15 @@ orchport run -- turbo dev
 | `mode`      | `local-port` \| `local-proxy` | 既定: `local-port`。`local-proxy` で内蔵リバプロとプロキシ経由 URL                                      |
 | `portRange` | `[number, number]`            | 既定: `[43100, 43999]`。`range: "auto"` と strict フォールバックで使用                                  |
 | `proxy`     | オブジェクト                  | `local-proxy` で `tls` 省略 → 開発用自己署名 `dev`。`tls: false` で HTTP のみ。`httpsPort` で追加リスナ |
-| `entries`   | 名前 → エントリ               | 必須。`web` なら `ORCHPORT_WEB_*`                                                                       |
+| `proxies`   | 名前 → プロキシ設定           | 必須。`web` なら `ORCHPORT_WEB_*`                                                                       |
 | `env`       | マップまたは TS では関数      | `${web.url}` などの補間                                                                                 |
 
-### エントリの形
+### プロキシの形
 
-| 書き方             | 意味                                                                                                   |
-| ------------------ | ------------------------------------------------------------------------------------------------------ |
-| `true` または `{}` | `range: "auto"`, `strategy: "deterministic"`, `strict: false` と同等                                   |
-| オブジェクト       | `range`（`"auto"` または `[min, max]`）, `strategy`, `strict`, 任意で `switchable`（文字列または配列） |
+| 書き方             | 意味                                                                                                                                                                    |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `true` または `{}` | `range: "auto"`, `strategy: "deterministic"`, `strict: false` と同等                                                                                                    |
+| オブジェクト       | `range`（`"auto"` または `[min, max]`）, `strategy`, `strict`, 任意で **`switchables`**（**文字列の配列**のみ）, 任意で **`env`**（そのプロキシ向けの補間付き環境変数） |
 
 > [!NOTE]
 > YAML / JSON ではレガシーキー `workspace` が `sld` と同義でマージされます。両方あり値が矛盾するとエラーです。
@@ -128,12 +128,12 @@ export default defineConfig({
   sld: "myapp",
   tld: "test",
   mode: "local-proxy",
-  entries: {
+  proxies: {
     web: { range: [3000, 3999], strategy: "smaller", strict: true },
     api: {
       range: [8000, 8999],
       strategy: "larger",
-      switchable: "/auth/callback/*",
+      switchables: ["/auth/callback/*"],
     },
     db: { range: [6000, 6999], strategy: "deterministic" },
     email: { range: [10_000, 10_999] },

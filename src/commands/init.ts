@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { getLogger } from "@logtape/logtape";
 import { define } from "gunshi";
 
-import { OrchportError } from "../utils/errors.ts";
+import { ErrorCode, OrchportError } from "../utils/errors.ts";
 import { pickBoolean, pickString } from "../utils/pick.ts";
 
 const log = getLogger(["orchport", "init"]);
@@ -14,16 +14,16 @@ const yamlTemplate = `sld: my-app
 worktree: main
 mode: local-port
 
-entries:
+proxies:
   web: true
   api: true
 
 env:
-  ORCHPORT_WEB_PORT: "\${entries.web.port}"
-  ORCHPORT_API_PORT: "\${entries.api.port}"
-  ORCHPORT_WEB_URL: "\${entries.web.url}"
-  ORCHPORT_API_URL: "\${entries.api.url}"
-  NEXT_PUBLIC_API_BASE_URL: "\${entries.api.url}"
+  ORCHPORT_WEB_PORT: "\${proxies.web.port}"
+  ORCHPORT_API_PORT: "\${proxies.api.port}"
+  ORCHPORT_WEB_URL: "\${proxies.web.url}"
+  ORCHPORT_API_URL: "\${proxies.api.url}"
+  NEXT_PUBLIC_API_BASE_URL: "\${proxies.api.url}"
 `;
 
 const tsTemplate = `import { defineConfig } from "orchport";
@@ -31,16 +31,16 @@ const tsTemplate = `import { defineConfig } from "orchport";
 export default defineConfig({
   sld: "my-app",
   mode: "local-port",
-  entries: {
+  proxies: {
     web: true,
     api: {},
   },
-  env: ({ entries }) => ({
-    ORCHPORT_WEB_PORT: String(entries.web.port),
-    ORCHPORT_API_PORT: String(entries.api.port),
-    ORCHPORT_WEB_URL: entries.web.url,
-    ORCHPORT_API_URL: entries.api.url,
-    NEXT_PUBLIC_API_BASE_URL: entries.api.url,
+  env: ({ proxies }) => ({
+    ORCHPORT_WEB_PORT: String(proxies.web.port),
+    ORCHPORT_API_PORT: String(proxies.api.port),
+    ORCHPORT_WEB_URL: proxies.web.url,
+    ORCHPORT_API_URL: proxies.api.url,
+    NEXT_PUBLIC_API_BASE_URL: proxies.api.url,
   }),
 });
 `;
@@ -49,16 +49,16 @@ const jsonTemplate = `{
   "sld": "my-app",
   "worktree": "main",
   "mode": "local-port",
-  "entries": {
+  "proxies": {
     "web": true,
     "api": true
   },
   "env": {
-    "ORCHPORT_WEB_PORT": "\${entries.web.port}",
-    "ORCHPORT_API_PORT": "\${entries.api.port}",
-    "ORCHPORT_WEB_URL": "\${entries.web.url}",
-    "ORCHPORT_API_URL": "\${entries.api.url}",
-    "NEXT_PUBLIC_API_BASE_URL": "\${entries.api.url}"
+    "ORCHPORT_WEB_PORT": "\${proxies.web.port}",
+    "ORCHPORT_API_PORT": "\${proxies.api.port}",
+    "ORCHPORT_WEB_URL": "\${proxies.web.url}",
+    "ORCHPORT_API_URL": "\${proxies.api.url}",
+    "NEXT_PUBLIC_API_BASE_URL": "\${proxies.api.url}"
   }
 }
 `;
@@ -98,8 +98,12 @@ export const initCommand = define({
     const target = join(cwd, name);
     if (existsSync(target) && !force) {
       throw new OrchportError(
-        "INIT_EXISTS",
-        `${name} already exists (use --force to overwrite)`
+        ErrorCode.INIT_EXISTS,
+        `${name} already exists (use --force to overwrite)`,
+        {
+          hint: "Pass `--force` to replace the file, or remove it manually.",
+          context: { path: target },
+        }
       );
     }
 

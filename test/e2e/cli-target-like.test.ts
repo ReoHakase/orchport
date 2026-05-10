@@ -60,27 +60,19 @@ describe("e2e target-like fixture", () => {
       const text = r.stdout.toString().trim();
       const envJson = parseEnvJson(text);
       expect(envJson.ORCHPORT_SLD).toBe(envJson.ORCHPORT_WORKSPACE);
-      if (format === "ts") {
-        expect(envJson.ORCHPORT_TLD).toBe(".test");
-        const ws = "myapp";
-        const wt = detectWorktreeName(fixture);
-        const pref = resolveWorktreeHostPrefix(wt, fixture);
-        expect(envJson.ORCHPORT_WORKSPACE).toBe(ws);
-        expect(envJson.ORCHPORT_WORKTREE).toBe(wt);
-        expect(envJson.ORCHPORT_MODE).toBe("local-proxy");
-        expect(envJson.ORCHPORT_PROXY_PORT).toBeDefined();
-        expect(envJson.ORCHPORT_HTTPS_PROXY_PORT).toBe("443");
-        const hostWeb = `web.${pref}${ws}.test`;
-        const hostApi = `api.${pref}${ws}.test`;
-        expect(envJson.ORCHPORT_WEB_URL).toBe(`https://${hostWeb}`);
-        expect(envJson.NEXT_PUBLIC_API_BASE_URL).toBe(`https://${hostApi}`);
-      } else {
-        expect(envJson.ORCHPORT_TLD).toBe(".localhost");
-        expect(envJson.ORCHPORT_WORKSPACE).toBe("enterprise-agentic-saas");
-        expect(envJson.ORCHPORT_WORKTREE).toBe("feature-auth");
-        expect(envJson.NEXT_PUBLIC_API_BASE_URL).toContain("api.feature-auth");
-        expect(envJson.APP_BASE_URL).toContain("web.feature-auth");
-      }
+      expect(envJson.ORCHPORT_TLD).toBe(".test");
+      const ws = "myapp";
+      const wt = detectWorktreeName(fixture);
+      const pref = resolveWorktreeHostPrefix(wt, fixture);
+      expect(envJson.ORCHPORT_WORKSPACE).toBe(ws);
+      expect(envJson.ORCHPORT_WORKTREE).toBe(wt);
+      expect(envJson.ORCHPORT_MODE).toBe("local-proxy");
+      expect(envJson.ORCHPORT_PROXY_PORT).toBeDefined();
+      expect(envJson.ORCHPORT_HTTPS_PROXY_PORT).toBe("443");
+      const hostWeb = `web.${pref}${ws}.test`;
+      const hostApi = `api.${pref}${ws}.test`;
+      expect(envJson.ORCHPORT_WEB_URL).toBe(`https://${hostWeb}`);
+      expect(envJson.NEXT_PUBLIC_API_BASE_URL).toBe(`https://${hostApi}`);
       expect(envJson.BETTER_AUTH_URL).toBe(envJson.API_PUBLIC_URL);
     }
   );
@@ -97,11 +89,7 @@ describe("e2e target-like fixture", () => {
       );
       expect(r.exitCode).toBe(0);
       const out = r.stdout.toString();
-      if (format === "ts") {
-        expect(out).toContain("https://");
-      } else {
-        expect(out).toContain("http://");
-      }
+      expect(out).toContain("https://");
     }
   );
 
@@ -122,6 +110,29 @@ describe("e2e target-like fixture", () => {
       expect(r.stderr.toString()).not.toContain("Starting");
     }
   );
+
+  test("run keeps interpolated env URLs in sync with ORCHPORT_*_URL when proxy URLs are rewritten (ts)", async () => {
+    const fixture = fixtureDir("ts");
+    const state = await mkdtemp(join(tmpdir(), "orchport-e2e-"));
+    await mkdir(state, { recursive: true });
+    const r = runOrchport(
+      [
+        "run",
+        "--",
+        "sh",
+        "-c",
+        [
+          'test "$TURSO_DATABASE_URL" = "$ORCHPORT_DB_URL"',
+          'test "$APP_BASE_URL" = "$ORCHPORT_WEB_URL"',
+          'test "$NEXT_PUBLIC_API_BASE_URL" = "$ORCHPORT_API_URL"',
+          "echo ok",
+        ].join(" && "),
+      ],
+      { cwd: fixture, env: { ORCHPORT_STATE_DIR: state } }
+    );
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout.toString().trim()).toBe("ok");
+  });
 
   test("run injects ORCHPORT_DEV_TLS_CERT_FILE and NODE_EXTRA_CA_CERTS for tls dev (ts)", async () => {
     const fixture = fixtureDir("ts");
@@ -211,6 +222,6 @@ describe("e2e target-like fixture", () => {
       env: { ORCHPORT_STATE_DIR: state },
     });
     expect(r.exitCode).toBe(0);
-    expect(r.stdout.toString()).toContain("read ok, write ok");
+    expect(r.stdout.toString()).toContain("read/write ok");
   });
 });

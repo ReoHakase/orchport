@@ -7,20 +7,20 @@ import {
 import { OrchportError } from "../../src/utils/errors.ts";
 
 describe("interpolateString", () => {
-  test("replaces entries paths", () => {
+  test("replaces proxies paths", () => {
     const root: Record<string, unknown> = {
-      entries: { web: { port: 43101, url: "http://localhost:43101" } },
+      proxies: { web: { port: 43101, url: "http://localhost:43101" } },
     };
-    expect(interpolateString("${entries.web.port}", root)).toBe("43101");
+    expect(interpolateString("${proxies.web.port}", root)).toBe("43101");
   });
 
-  test("replaces entry shorthand when root includes alias", () => {
+  test("replaces proxy shorthand when root includes alias", () => {
     const root = buildInterpolateRoot({
       sld: "w",
       tld: ".localhost",
       worktree: "t",
       worktreeHostPrefix: "",
-      entries: {
+      proxies: {
         web: {
           port: 43101,
           url: "http://x",
@@ -34,8 +34,8 @@ describe("interpolateString", () => {
 
   test("throws on missing key", () => {
     expect(() =>
-      interpolateString("${entries.missing.port}", {
-        entries: {},
+      interpolateString("${proxies.missing.port}", {
+        proxies: {},
       })
     ).toThrow(OrchportError);
   });

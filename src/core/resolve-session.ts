@@ -6,25 +6,21 @@ import { basename } from "node:path";
 
 import { getLogger } from "@logtape/logtape";
 
-import type {
-  EntryConfig,
-  LoadedConfig,
-  PortPickStrategy,
-  ResolvedEntryShape,
-} from "../config/schema.ts";
+import type { LoadedConfig, ResolvedProxyShape } from "../config/schema.ts";
 import { normalizeConfigTld } from "../config/tld.ts";
 import { interpolateEnvValues } from "../env/interpolate.ts";
 import type { InterpolateCtx } from "../env/interpolate.ts";
-import { isLocalPortFree, pickPortInRange } from "../ports/allocate.ts";
+import { pickPortInRange } from "../ports/allocate.ts";
 import { isReservedOrchportEnvKey } from "../utils/env-keys.ts";
-import { OrchportError } from "../utils/errors.ts";
+import { ErrorCode, OrchportError } from "../utils/errors.ts";
 import {
   detectWorktreeName,
   getGitRepositoryBasename,
   resolveWorktreeHostPrefix,
 } from "../utils/git.ts";
 import { entryKeyToEnvPrefix } from "../utils/snake.ts";
-import { buildLocalProxyHost } from "./local-proxy-host.ts";
+import { pickEntryPort } from "./port-picker.ts";
+import { buildEntryUrl } from "./url-builder.ts";
 import { packageVersion } from "./version.ts";
 
 const log = getLogger(["orchport", "resolve"]);
@@ -39,6 +35,8 @@ export type ResolveOptions = {
   worktreeCli?: string;
   runId: string;
   withProxy: boolean;
+  /** When set, merge that proxy's `env` block after global `env` (`orchport run <name> -- …`). */
+  runTarget?: string;
 };
 
 /** Fully resolved ports, URLs, and final `process.env`-style map (string values only). */
@@ -51,7 +49,7 @@ export type ResolvedSession = {
   /** Same segment rules as built-in proxy hostnames (`web.main.repo` vs `web.repo`). */
   worktreeHostPrefix: string;
   mode: "local-port" | "local-proxy";
-  entries: Record<string, ResolvedEntryShape>;
+  proxies: Record<string, ResolvedProxyShape>;
   proxyPort?: number;
   env: Record<string, string>;
   configPath: string | null;
@@ -59,152 +57,190 @@ export type ResolvedSession = {
 
 const defaultLocalUrl = (port: number): string => `http://localhost:${port}`;
 
-const pickEntryPort = async (options: {
-  name: string;
-  ec: EntryConfig;
-  pMin: number;
-  pMax: number;
-  used: Set<number>;
-  sld: string;
-  worktree: string;
-}): Promise<number> => {
-  const { name, ec, pMin, pMax, used, sld, worktree } = options;
-  const { range, strategy, strict } = ec;
+const interpolateCtxBase = (
+  rebuilt: Record<string, ResolvedProxyShape>,
+  sld: string,
+  tld: string,
+  worktree: string,
+  worktreeHostPrefix: string,
+  proxyPort: number | undefined
+): InterpolateCtx => ({
+  sld,
+  tld,
+  worktree,
+  worktreeHostPrefix,
+  proxies: rebuilt,
+  proxyPort,
+});
 
-  const pickIn = (min: number, max: number, strat: PortPickStrategy) =>
-    pickPortInRange({
-      sld,
-      worktree,
-      entryName: name,
-      min,
-      max,
-      avoid: used,
-      strategy: strat,
-    });
+/** Rebuild interpolation context from a resolved session (same ports/URLs as `session.env`). */
+const interpolateCtxFromSession = (session: ResolvedSession): InterpolateCtx =>
+  interpolateCtxBase(
+    session.proxies,
+    session.sld,
+    session.tld,
+    session.worktree,
+    session.worktreeHostPrefix,
+    session.proxyPort
+  );
 
-  if (range === "auto") {
-    const port = await pickIn(pMin, pMax, strategy);
-    log.debug("Entry {name} auto-range port {port}", {
-      name,
-      port: String(port),
-    });
-    return port;
-  }
-
-  const [rMin, rMax] = range;
-  if (rMin === rMax) {
-    const p = rMin;
-    if (used.has(p)) {
-      throw new OrchportError(
-        "PORT_TAKEN",
-        `Port ${p} already assigned to another entry in this resolution`
-      );
-    }
-    /* eslint-disable-next-line no-await-in-loop */
-    if (await isLocalPortFree(p)) {
-      log.debug("Entry {name} fixed port {port}", { name, port: String(p) });
-      return p;
-    }
-    if (!strict) {
-      log.warning(
-        "Entry {name}: port {port} unavailable; falling back to global portRange (strict: false)",
-        { name, port: String(p) }
-      );
-      const port = await pickIn(pMin, pMax, "deterministic");
-      log.debug("Entry {name} fallback port {port}", {
-        name,
-        port: String(port),
-      });
-      return port;
-    }
-    throw new OrchportError(
-      "PORT_IN_USE",
-      `Requested port ${p} is not available`
-    );
-  }
-
-  try {
-    const port = await pickIn(rMin, rMax, strategy);
-    log.debug("Entry {name} port {port} (range {min}-{max} strategy {strat})", {
-      name,
-      port: String(port),
-      min: String(rMin),
-      max: String(rMax),
-      strat: strategy,
-    });
-    return port;
-  } catch (err) {
-    if (!strict) {
-      const msg = err instanceof Error ? err.message : String(err);
-      log.warning(
-        "Entry {name}: no free port in {min}-{max} ({msg}); falling back to global portRange",
-        { name, min: String(rMin), max: String(rMax), msg }
-      );
-      const port = await pickIn(pMin, pMax, "deterministic");
-      log.debug("Entry {name} fallback port {port}", {
-        name,
-        port: String(port),
-      });
-      return port;
-    }
-    throw new OrchportError(
-      "PORT_RANGE",
-      err instanceof Error ? err.message : String(err)
-    );
-  }
-};
-
-const buildEntryUrl = (options: {
-  config: LoadedConfig;
-  entry: ResolvedEntryShape;
+type StandardEnvParams = {
+  runId: string;
   sld: string;
   tld: string;
   worktree: string;
-  worktreeHostPrefix: string;
-  proxyPort?: number;
-}): string => {
-  const { config, entry, sld, tld, worktree, worktreeHostPrefix, proxyPort } =
-    options;
-  const mode = config.mode ?? "local-port";
+  mode: "local-port" | "local-proxy";
+  configPath: string | null;
+  rebuilt: Record<string, ResolvedProxyShape>;
+  proxyPort: number | undefined;
+  config: LoadedConfig;
+};
 
-  if (typeof config.url === "function") {
-    return config.url({
-      entry,
+const buildStandardEnvBlock = (
+  p: StandardEnvParams
+): Record<string, string> => {
+  const ver = packageVersion();
+  const standard: Record<string, string> = {
+    ORCHPORT: "1",
+    ORCHPORT_VERSION: ver,
+    ORCHPORT_RUN_ID: p.runId,
+    ORCHPORT_SLD: p.sld,
+    ORCHPORT_TLD: p.tld,
+    ORCHPORT_WORKSPACE: p.sld,
+    ORCHPORT_WORKTREE: p.worktree,
+    ORCHPORT_MODE: p.mode,
+    ORCHPORT_CONFIG: p.configPath ?? "",
+  };
+
+  const proxyNames = Object.keys(p.rebuilt).toSorted();
+  for (const name of proxyNames) {
+    const e = p.rebuilt[name];
+    const prefix = entryKeyToEnvPrefix(name);
+    standard[`ORCHPORT_${prefix}_PORT`] = String(e.port);
+    standard[`ORCHPORT_${prefix}_HOST`] = e.host;
+    standard[`ORCHPORT_${prefix}_URL`] = e.url;
+    standard[`ORCHPORT_${prefix}_LOCAL_URL`] = e.localUrl;
+  }
+
+  if (p.proxyPort !== undefined) {
+    standard.ORCHPORT_PROXY_PORT = String(p.proxyPort);
+    const tls = p.config.proxy?.tls;
+    const useTls =
+      tls !== false &&
+      (tls === "dev" || (typeof tls === "object" && tls !== null));
+    if (useTls && p.config.proxy?.httpsPort !== false) {
+      const pub =
+        typeof p.config.proxy?.httpsPort === "number"
+          ? p.config.proxy.httpsPort
+          : 443;
+      standard.ORCHPORT_HTTPS_PROXY_PORT = String(pub);
+    }
+  }
+
+  return standard;
+};
+
+const resolveGlobalUserFlat = (
+  config: LoadedConfig,
+  ictx: InterpolateCtx,
+  rebuilt: Record<string, ResolvedProxyShape>,
+  sld: string,
+  tld: string,
+  worktree: string,
+  worktreeHostPrefix: string
+): Record<string, string> => {
+  let userFlat: Record<string, string> = {};
+  if (typeof config.env === "function") {
+    const o = config.env({
+      proxies: rebuilt,
       sld,
       tld,
       workspace: sld,
       worktree,
       worktreeHostPrefix,
-      mode,
     });
+    for (const [k, val] of Object.entries(o)) {
+      if (val === null) {
+        continue;
+      }
+      userFlat[k] = typeof val === "string" ? val : String(val);
+    }
+  } else if (config.env) {
+    userFlat = interpolateEnvValues(config.env, ictx);
   }
+  return userFlat;
+};
 
-  if (mode === "local-proxy" && proxyPort) {
-    const host = buildLocalProxyHost(entry.name, worktreeHostPrefix, sld, tld);
-    const tls = config.proxy?.tls;
-    const useTls =
-      tls !== false &&
-      (tls === "dev" || (typeof tls === "object" && tls !== null));
-    if (!useTls) {
-      return `http://${host}:${proxyPort}`;
+const mergeStandardWithUserFlat = (
+  standard: Record<string, string>,
+  userFlat: Record<string, string>,
+  logReserved: boolean
+): Record<string, string> => {
+  const env: Record<string, string> = { ...standard };
+  for (const [k, val] of Object.entries(userFlat)) {
+    if (isReservedOrchportEnvKey(k)) {
+      if (logReserved) {
+        log.debug("Skipping reserved env override {key}", { key: k });
+      }
+      continue;
     }
-    /** Standard public port (443 default) when not opted out; main listener stays on `proxyPort`. */
-    const hp = config.proxy?.httpsPort;
-    if (hp === false) {
-      return `https://${host}:${proxyPort}`;
-    }
-    const pub = typeof hp === "number" ? hp : 443;
-    if (pub === 443) {
-      return `https://${host}`;
-    }
-    return `https://${host}:${pub}`;
+    env[k] = val;
   }
-
-  return `http://${entry.name}.${worktreeHostPrefix}${sld}${tld}:${entry.port}`;
+  return env;
 };
 
 /**
- * Computes stable ports per entry, optional proxy port, and merged environment.
+ * Full env map per configured proxy: standard `ORCHPORT_*` + global `env` + that proxy's `env`
+ * (same merge order as `resolveSession` with `runTarget` set).
+ */
+export const buildEnvByProxy = (
+  session: ResolvedSession,
+  config: LoadedConfig
+): Record<string, Record<string, string>> => {
+  const runId = session.env.ORCHPORT_RUN_ID ?? "";
+  const standard = buildStandardEnvBlock({
+    runId,
+    sld: session.sld,
+    tld: session.tld,
+    worktree: session.worktree,
+    mode: session.mode,
+    configPath: session.configPath,
+    rebuilt: session.proxies,
+    proxyPort: session.proxyPort,
+    config,
+  });
+
+  const ictx = interpolateCtxFromSession(session);
+  const globalFlat = resolveGlobalUserFlat(
+    config,
+    ictx,
+    session.proxies,
+    session.sld,
+    session.tld,
+    session.worktree,
+    session.worktreeHostPrefix
+  );
+
+  const proxyNames = Object.keys(config.proxies).toSorted();
+  const out: Record<string, Record<string, string>> = {};
+
+  for (const name of proxyNames) {
+    const userFlat = { ...globalFlat };
+    const pe = config.proxies[name]?.env;
+    if (pe !== undefined) {
+      const extra = interpolateEnvValues(pe, ictx);
+      for (const [k, val] of Object.entries(extra)) {
+        userFlat[k] = val;
+      }
+    }
+    out[name] = mergeStandardWithUserFlat(standard, userFlat, false);
+  }
+
+  return out;
+};
+
+/**
+ * Computes stable ports per proxy, optional reverse-proxy port, and merged environment.
  * User `env` cannot override reserved orchport keys (`ORCHPORT*`, legacy `orchport*`).
  */
 export const resolveSession = async (
@@ -241,7 +277,14 @@ export const resolveSession = async (
 
   const [pMin, pMax] = config.portRange ?? [43100, 43999];
   if (pMin > pMax) {
-    throw new OrchportError("PORT_RANGE", `portRange invalid: ${pMin}-${pMax}`);
+    throw new OrchportError(
+      ErrorCode.PORT_RANGE,
+      `portRange invalid: ${pMin}-${pMax}`,
+      {
+        hint: "Set portRange to [min, max] with min <= max (inclusive).",
+        context: { min: String(pMin), max: String(pMax) },
+      }
+    );
   }
   log.trace("portRange {min}-{max}", { min: String(pMin), max: String(pMax) });
 
@@ -276,14 +319,11 @@ export const resolveSession = async (
     });
   }
 
-  const entries: Record<string, ResolvedEntryShape> = {};
-  const entryNames = Object.keys(config.entries).toSorted();
-  if (entryNames.length === 0) {
-    throw new OrchportError("CONFIG", "Config must define at least one entry");
-  }
+  const proxies: Record<string, ResolvedProxyShape> = {};
+  const proxyNames = Object.keys(config.proxies).toSorted();
 
-  for (const name of entryNames) {
-    const ec = config.entries[name];
+  for (const name of proxyNames) {
+    const ec = config.proxies[name];
     /* eslint-disable-next-line no-await-in-loop */
     const port = await pickEntryPort({
       name,
@@ -298,7 +338,7 @@ export const resolveSession = async (
 
     const host = "localhost";
     const localUrl = defaultLocalUrl(port);
-    entries[name] = {
+    proxies[name] = {
       name,
       port,
       host,
@@ -307,12 +347,12 @@ export const resolveSession = async (
     };
   }
 
-  const rebuilt: Record<string, ResolvedEntryShape> = {};
-  for (const name of entryNames) {
-    const cur = entries[name];
+  const rebuilt: Record<string, ResolvedProxyShape> = {};
+  for (const name of proxyNames) {
+    const cur = proxies[name];
     const url = buildEntryUrl({
       config,
-      entry: cur,
+      proxy: cur,
       sld,
       tld,
       worktree,
@@ -320,87 +360,71 @@ export const resolveSession = async (
       proxyPort,
     });
     rebuilt[name] = { ...cur, url };
-    log.trace("Entry {name} public url={url}", { name, url });
+    log.trace("Proxy {name} public url={url}", { name, url });
   }
 
-  const ver = packageVersion();
-  const standard: Record<string, string> = {
-    ORCHPORT: "1",
-    ORCHPORT_VERSION: ver,
-    ORCHPORT_RUN_ID: runId,
-    ORCHPORT_SLD: sld,
-    ORCHPORT_TLD: tld,
-    ORCHPORT_WORKSPACE: sld,
-    ORCHPORT_WORKTREE: worktree,
-    ORCHPORT_MODE: mode,
-    ORCHPORT_CONFIG: config.configPath ?? "",
-  };
-
-  for (const name of entryNames) {
-    const e = rebuilt[name];
-    const prefix = entryKeyToEnvPrefix(name);
-    standard[`ORCHPORT_${prefix}_PORT`] = String(e.port);
-    standard[`ORCHPORT_${prefix}_HOST`] = e.host;
-    standard[`ORCHPORT_${prefix}_URL`] = e.url;
-    standard[`ORCHPORT_${prefix}_LOCAL_URL`] = e.localUrl;
-  }
-
-  if (proxyPort !== undefined) {
-    standard.ORCHPORT_PROXY_PORT = String(proxyPort);
-    const tls = config.proxy?.tls;
-    const useTls =
-      tls !== false &&
-      (tls === "dev" || (typeof tls === "object" && tls !== null));
-    if (useTls && config.proxy?.httpsPort !== false) {
-      const pub =
-        typeof config.proxy?.httpsPort === "number"
-          ? config.proxy.httpsPort
-          : 443;
-      standard.ORCHPORT_HTTPS_PROXY_PORT = String(pub);
+  const rt = options.runTarget?.trim();
+  if (rt !== undefined && rt !== "") {
+    if (rebuilt[rt] === undefined) {
+      throw new OrchportError(
+        ErrorCode.RUN_UNKNOWN_PROXY,
+        `Unknown proxy "${rt}" in config`,
+        {
+          hint: `Use one of: ${proxyNames.join(", ")}`,
+          context: { proxy: rt },
+        }
+      );
     }
   }
 
-  let userFlat: Record<string, string> = {};
-  if (typeof config.env === "function") {
-    const o = config.env({
-      entries: rebuilt,
-      sld,
-      tld,
-      workspace: sld,
-      worktree,
-      worktreeHostPrefix,
-    });
-    for (const [k, val] of Object.entries(o)) {
-      if (val === null) {
-        continue;
+  const standard = buildStandardEnvBlock({
+    runId,
+    sld,
+    tld,
+    worktree,
+    mode,
+    configPath: config.configPath ?? null,
+    rebuilt,
+    proxyPort,
+    config,
+  });
+
+  const ictx = interpolateCtxBase(
+    rebuilt,
+    sld,
+    tld,
+    worktree,
+    worktreeHostPrefix,
+    proxyPort
+  );
+
+  let userFlat = resolveGlobalUserFlat(
+    config,
+    ictx,
+    rebuilt,
+    sld,
+    tld,
+    worktree,
+    worktreeHostPrefix
+  );
+
+  if (rt !== undefined && rt !== "") {
+    const pe = config.proxies[rt]?.env;
+    if (pe !== undefined) {
+      const extra = interpolateEnvValues(pe, ictx);
+      for (const [k, val] of Object.entries(extra)) {
+        userFlat[k] = val;
       }
-      userFlat[k] = typeof val === "string" ? val : String(val);
     }
-  } else if (config.env) {
-    userFlat = interpolateEnvValues(config.env, {
-      sld,
-      tld,
-      worktree,
-      worktreeHostPrefix,
-      entries: rebuilt,
-      proxyPort,
-    } satisfies InterpolateCtx);
   }
 
-  const env: Record<string, string> = { ...standard };
-  for (const [k, val] of Object.entries(userFlat)) {
-    if (isReservedOrchportEnvKey(k)) {
-      log.debug("Skipping reserved env override {key}", { key: k });
-      continue;
-    }
-    env[k] = val;
-  }
+  const env = mergeStandardWithUserFlat(standard, userFlat, true);
 
   log.debug(
-    "Resolved session runId={runId} entries={n} envKeys={k} proxyPort={proxy}",
+    "Resolved session runId={runId} proxies={n} envKeys={k} proxyPort={proxy}",
     {
       runId,
-      n: String(entryNames.length),
+      n: String(proxyNames.length),
       k: String(Object.keys(env).length),
       proxy: proxyPort !== undefined ? String(proxyPort) : "-",
     }
@@ -418,7 +442,7 @@ export const resolveSession = async (
     worktree,
     worktreeHostPrefix,
     mode,
-    entries: rebuilt,
+    proxies: rebuilt,
     proxyPort,
     env,
     configPath: config.configPath,

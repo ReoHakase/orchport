@@ -7,9 +7,9 @@ import { join } from "node:path";
 
 import { getLogger } from "@logtape/logtape";
 
-import type { EntryConfig } from "../config/schema.ts";
+import type { ProxyConfig } from "../config/schema.ts";
 import { normalizeSwitchPattern } from "../proxy/path-match.ts";
-import { OrchportError } from "../utils/errors.ts";
+import { ErrorCode, OrchportError } from "../utils/errors.ts";
 import { isRecord } from "../utils/pick.ts";
 import { listRunStates } from "./store.ts";
 import type { SwitchRegistryFile } from "./types.ts";
@@ -24,9 +24,9 @@ export const switchesPath = (): string => join(getStateDir(), FILE);
 export const buildSwitchRegistryKey = (
   sld: string,
   tld: string,
-  entryName: string,
+  proxyName: string,
   normalizedPattern: string
-): string => `${sld}|${tld}|${entryName}|${normalizedPattern}`;
+): string => `${sld}|${tld}|${proxyName}|${normalizedPattern}`;
 
 const emptyRegistry = (): SwitchRegistryFile => ({ version: 1, entries: {} });
 
@@ -36,7 +36,14 @@ const isSwitchRegistryFile = (raw: unknown): raw is SwitchRegistryFile =>
 export const parseSwitchRegistry = (text: string): SwitchRegistryFile => {
   const raw: unknown = JSON.parse(text);
   if (!isSwitchRegistryFile(raw)) {
-    throw new OrchportError("STATE", "Invalid switches.json format");
+    throw new OrchportError(
+      ErrorCode.STATE_PARSE,
+      "Invalid switches.json format",
+      {
+        hint: "Delete or repair switches.json under your orchport state directory, or run `orchport doctor`.",
+        context: { path: switchesPath() },
+      }
+    );
   }
   return raw;
 };
@@ -63,7 +70,7 @@ export const writeSwitchRegistry = async (
 };
 
 /**
- * On `orchport run`: claim all switch slots for entries with `switchable`.
+ * On `orchport run`: claim all switch slots for proxies with `switchables`.
  * @throws OrchportError SWITCH_CONFLICT if another worktree owns a slot and `force` is false.
  */
 export const claimSwitchSlotsForRun = async (options: {
@@ -71,21 +78,21 @@ export const claimSwitchSlotsForRun = async (options: {
   tld: string;
   worktree: string;
   runId: string;
-  entries: Record<string, EntryConfig>;
+  proxies: Record<string, ProxyConfig>;
   force: boolean;
 }): Promise<void> => {
-  const { sld, tld, worktree, runId, entries, force } = options;
-  const updates: Array<{ key: string; pattern: string; entryName: string }> =
+  const { sld, tld, worktree, runId, proxies, force } = options;
+  const updates: Array<{ key: string; pattern: string; proxyName: string }> =
     [];
-  for (const [entryName, ec] of Object.entries(entries)) {
-    const patterns = ec.switchable;
+  for (const [proxyName, pc] of Object.entries(proxies)) {
+    const patterns = pc.switchables;
     if (patterns === undefined || patterns.length === 0) {
       continue;
     }
     for (const raw of patterns) {
       const pattern = normalizeSwitchPattern(raw);
-      const key = buildSwitchRegistryKey(sld, tld, entryName, pattern);
-      updates.push({ key, pattern, entryName });
+      const key = buildSwitchRegistryKey(sld, tld, proxyName, pattern);
+      updates.push({ key, pattern, proxyName });
     }
   }
   if (updates.length === 0) {
@@ -97,8 +104,12 @@ export const claimSwitchSlotsForRun = async (options: {
     const cur = reg.entries[key];
     if (cur !== undefined && cur.targetWorktree !== worktree && !force) {
       throw new OrchportError(
-        "SWITCH_CONFLICT",
-        `Switch slot "${key}" is owned by worktree "${cur.targetWorktree}"; use --force-switch to take over, or run \`orchport switch ${worktree}\` first.`
+        ErrorCode.SWITCH_CONFLICT,
+        `Switch slot "${key}" is owned by worktree "${cur.targetWorktree}"; use --force-switch to take over, or run \`orchport switch ${worktree}\` first.`,
+        {
+          hint: "Pass global `--force-switch` on `orchport run`, or run `orchport switch <worktree>` to retarget slots.",
+          context: { key, owner: cur.targetWorktree, worktree },
+        }
       );
     }
     if (cur !== undefined && cur.targetWorktree !== worktree && force) {
@@ -121,26 +132,26 @@ export const claimSwitchSlotsForRun = async (options: {
 };
 
 /**
- * `orchport switch <worktree>`: point all configured switchable paths to this worktree.
+ * `orchport switch <worktree>`: point all configured switchables paths to this worktree.
  */
 export const setSwitchTargetsFromConfig = async (options: {
   sld: string;
   tld: string;
   targetWorktree: string;
-  entries: Record<string, EntryConfig>;
+  proxies: Record<string, ProxyConfig>;
 }): Promise<string[]> => {
-  const { sld, tld, targetWorktree, entries } = options;
+  const { sld, tld, targetWorktree, proxies } = options;
   const reg = await readSwitchRegistry();
   const touched: string[] = [];
   const now = new Date().toISOString();
-  for (const [entryName, ec] of Object.entries(entries)) {
-    const patterns = ec.switchable;
+  for (const [proxyName, pc] of Object.entries(proxies)) {
+    const patterns = pc.switchables;
     if (patterns === undefined || patterns.length === 0) {
       continue;
     }
     for (const raw of patterns) {
       const pattern = normalizeSwitchPattern(raw);
-      const key = buildSwitchRegistryKey(sld, tld, entryName, pattern);
+      const key = buildSwitchRegistryKey(sld, tld, proxyName, pattern);
       reg.entries[key] = {
         targetWorktree: targetWorktree,
         updatedAt: now,
@@ -154,19 +165,19 @@ export const setSwitchTargetsFromConfig = async (options: {
   return touched;
 };
 
-/** Latest run state port for `entryName` in `targetWorktree`, or null. */
+/** Latest run state port for `proxyName` in `targetWorktree`, or null. */
 export const resolveSwitchTargetPort = async (
   targetWorktree: string,
-  entryName: string
+  proxyName: string
 ): Promise<number | null> => {
   const states = await listRunStates();
   const withEntry = states.filter(
-    (s) => s.worktree === targetWorktree && s.entries[entryName] !== undefined
+    (s) => s.worktree === targetWorktree && s.proxies[proxyName] !== undefined
   );
   if (withEntry.length === 0) {
     return null;
   }
   withEntry.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  const port = withEntry[0].entries[entryName]?.port;
+  const port = withEntry[0].proxies[proxyName]?.port;
   return typeof port === "number" ? port : null;
 };

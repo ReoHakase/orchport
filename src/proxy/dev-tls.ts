@@ -9,7 +9,7 @@ import { join } from "node:path";
 
 import { getLogger } from "@logtape/logtape";
 
-import { OrchportError } from "../utils/errors.ts";
+import { ErrorCode, OrchportError } from "../utils/errors.ts";
 
 const log = getLogger(["orchport", "dev-tls"]);
 
@@ -28,7 +28,9 @@ export const generateDevSelfSignedTlsSync = (
 ): DevTlsResult => {
   const unique = [...new Set(hostnames.map((h) => h.toLowerCase()))];
   if (unique.length === 0) {
-    throw new OrchportError("DEV_TLS", "No hostnames for dev TLS");
+    throw new OrchportError(ErrorCode.DEV_TLS, "No hostnames for dev TLS", {
+      hint: "Ensure your config defines at least one entry so proxy hostnames can be derived.",
+    });
   }
   log.trace("dev TLS SAN hostnames: {hosts}", { hosts: unique.join(", ") });
   const dir = mkdtempSync(join(tmpdir(), "orchport-devtls-"));
@@ -61,10 +63,13 @@ export const generateDevSelfSignedTlsSync = (
     rmSync(dir, { recursive: true, force: true });
     const detail = [r.stderr, r.stdout].filter(Boolean).join("\n").trim();
     throw new OrchportError(
-      "DEV_TLS",
+      ErrorCode.DEV_TLS,
       detail
         ? `openssl failed (is openssl installed?): ${detail}`
-        : "openssl failed (is openssl installed?)"
+        : "openssl failed (is openssl installed?)",
+      {
+        hint: "Install OpenSSL and ensure `openssl` is on PATH (macOS/Linux typically include it).",
+      }
     );
   }
   return {

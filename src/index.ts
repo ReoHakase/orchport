@@ -1,9 +1,11 @@
 import { getLogger } from "@logtape/logtape";
 
+import { peekGlobalJsonErrorsFlag } from "./cli-json.ts";
 import { runCli } from "./cli.ts";
+import { formatOrchportCliError } from "./cli/format.ts";
 import { packageVersion } from "./core/version.ts";
 import { setupLogging } from "./logging/setup.ts";
-import { OrchportError } from "./utils/errors.ts";
+import { orchportErrorToJson, OrchportError } from "./utils/errors.ts";
 
 const peekLogFlags = (
   argv: string[]
@@ -19,6 +21,7 @@ const log = getLogger(["orchport", "cli"]);
 const main = async (): Promise<void> => {
   const argv = process.argv.slice(2);
   const logFlags = peekLogFlags(argv);
+  const jsonErrors = peekGlobalJsonErrorsFlag(argv);
   await setupLogging(logFlags);
   log.trace("orchport {version} cwd={cwd}", {
     version: packageVersion(),
@@ -34,13 +37,33 @@ const main = async (): Promise<void> => {
     await runCli(argv);
   } catch (e) {
     if (e instanceof OrchportError) {
-      log.error("{message}", { message: e.message });
+      if (jsonErrors) {
+        process.stderr.write(
+          `${JSON.stringify(orchportErrorToJson(e, process.cwd()))}\n`
+        );
+      } else {
+        process.stderr.write(
+          formatOrchportCliError(e, {
+            tty: process.stderr.isTTY === true && !logFlags.noColor,
+          })
+        );
+      }
       process.exitCode = 1;
       return;
     }
-    log.error("{message}", {
-      message: e instanceof Error ? e.message : String(e),
-    });
+    const msg = e instanceof Error ? e.message : String(e);
+    if (jsonErrors) {
+      process.stderr.write(
+        `${JSON.stringify({
+          error: true,
+          code: "UNKNOWN",
+          message: msg,
+          context: { cwd: process.cwd() },
+        })}\n`
+      );
+    } else {
+      log.error("{message}", { message: msg });
+    }
     process.exitCode = 1;
   }
 };

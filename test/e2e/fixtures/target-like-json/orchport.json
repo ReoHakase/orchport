@@ -1,24 +1,42 @@
 {
-  "sld": "enterprise-agentic-saas",
-  "worktree": "feature-auth",
-  "mode": "local-port",
-  "entries": {
-    "web": true,
-    "api": true,
-    "db": true,
-    "email": true
+  "tld": "test",
+  "sld": "myapp",
+  "mode": "local-proxy",
+  "proxies": {
+    "web": {
+      "range": [3000, 3999],
+      "strategy": "smaller",
+      "strict": true,
+      "env": {
+        "API_URL": "${api.url}"
+      }
+    },
+    "api": {
+      "range": [8000, 8999],
+      "strategy": "larger",
+      "switchables": ["/auth/callback/*"],
+      "env": {
+        "DB_URL": "${db.url}",
+        "EMAIL_URL": "${email.url}"
+      }
+    },
+    "db": {
+      "range": [6000, 6999],
+      "strategy": "deterministic"
+    },
+    "email": {
+      "range": [10000, 10999]
+    },
+    "storybook": {
+      "env": {}
+    }
   },
   "env": {
-    "APP_BASE_URL": "${entries.web.url}",
-    "NEXT_PUBLIC_API_BASE_URL": "${entries.api.url}",
-    "API_PUBLIC_URL": "${entries.api.url}",
-    "BETTER_AUTH_URL": "${entries.api.url}",
-    "TRUSTED_ORIGINS": "${entries.web.url}",
-    "CORS_ORIGIN": "${entries.web.url}",
-    "TURSO_DATABASE_URL": "${entries.db.url}",
-    "ORCHPORT_WEB_PORT": "${entries.web.port}",
-    "ORCHPORT_API_PORT": "${entries.api.port}",
-    "ORCHPORT_DB_PORT": "${entries.db.port}",
-    "ORCHPORT_EMAIL_PORT": "${entries.email.port}"
+    "TRUSTED_ORIGINS": "${web.url},${api.url}",
+    "APP_BASE_URL": "${web.url}",
+    "NEXT_PUBLIC_API_BASE_URL": "${api.url}",
+    "API_PUBLIC_URL": "${api.url}",
+    "BETTER_AUTH_URL": "${api.url}",
+    "TURSO_DATABASE_URL": "${db.url}"
   }
 }

@@ -1,5 +1,6 @@
 import { getLogger } from "@logtape/logtape";
 import { define } from "gunshi";
+import { getBorderCharacters, table } from "table";
 
 import { listRunStates } from "../state/store.ts";
 import { pickBoolean, pickString } from "../utils/pick.ts";
@@ -13,6 +14,11 @@ const pidAlive = (pid: number): boolean => {
   } catch {
     return false;
   }
+};
+
+const termWidth = (): number => {
+  const c = process.stdout.columns;
+  return typeof c === "number" && c > 48 ? c : 100;
 };
 
 /** Reads persisted run state from disk; `--json` or human-readable table. Volatile runs (no state file) do not appear. */
@@ -62,14 +68,63 @@ export const listCommand = define({
       return;
     }
 
+    const tty =
+      process.stdout.isTTY === true && process.env.NO_COLOR === undefined;
+    const tw = termWidth();
+    const useColor = tty;
+
+    if (filtered.length === 0) {
+      process.stdout.write("(no recorded runs)\n");
+      return;
+    }
+
+    const head: [string, string, string, string, string] = useColor
+      ? [
+          "\x1b[1m\x1b[35mRun\x1b[0m",
+          "\x1b[1m\x1b[35mStatus\x1b[0m",
+          "\x1b[1m\x1b[35mPID\x1b[0m",
+          "\x1b[1m\x1b[35mWorkspace\x1b[0m",
+          "\x1b[1m\x1b[35mProxies\x1b[0m",
+        ]
+      : ["Run", "Status", "PID", "Workspace", "Proxies"];
+
+    const w1 = Math.min(14, Math.floor(tw * 0.18));
+    const w4 = Math.min(28, Math.floor(tw * 0.28));
+    const w5 = Math.max(12, tw - 62);
+
+    const dataRows: string[][] = [];
     for (const r of filtered) {
-      const status = r.running ? "running" : "stopped";
-      const entries = Object.entries(r.entries)
+      const status = r.running
+        ? useColor
+          ? "\x1b[32m● running\x1b[0m"
+          : "running"
+        : useColor
+          ? "\x1b[2m○ stopped\x1b[0m"
+          : "stopped";
+      const proxyCols = Object.entries(r.proxies)
         .map(([k, e]) => `${k}:${e.port}`)
         .join(" ");
-      process.stdout.write(
-        `${r.runId}  ${status}  pid=${r.rootPid}  ${r.workspace}/${r.worktree}  [${entries}]\n`
-      );
+      dataRows.push([
+        r.runId.slice(0, 10),
+        status,
+        String(r.rootPid),
+        `${r.workspace}/${r.worktree}`,
+        proxyCols,
+      ]);
     }
+
+    const tableRows = [head, ...dataRows];
+    process.stdout.write(
+      `${table(tableRows, {
+        border: getBorderCharacters("norc"),
+        columns: [
+          { width: w1, wrapWord: true },
+          { width: 12, wrapWord: true },
+          { width: 8, wrapWord: true },
+          { width: w4, wrapWord: true },
+          { width: w5, wrapWord: true },
+        ],
+      })}\n`
+    );
   },
 });

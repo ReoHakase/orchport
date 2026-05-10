@@ -27,12 +27,12 @@ describe("switch registry", () => {
         tld: ".localhost",
         worktree: "main",
         runId: "r1",
-        entries: {
+        proxies: {
           api: {
             range: "auto",
             strategy: "deterministic",
             strict: false,
-            switchable: ["/x/*"],
+            switchables: ["/x/*"],
           },
         },
         force: false,
@@ -43,12 +43,12 @@ describe("switch registry", () => {
           tld: ".localhost",
           worktree: "other",
           runId: "r2",
-          entries: {
+          proxies: {
             api: {
               range: "auto",
               strategy: "deterministic",
               strict: false,
-              switchable: ["/x/*"],
+              switchables: ["/x/*"],
             },
           },
           force: false,
@@ -74,12 +74,12 @@ describe("switch registry", () => {
         tld: ".localhost",
         worktree: "main",
         runId: "r1",
-        entries: {
+        proxies: {
           api: {
             range: "auto",
             strategy: "deterministic",
             strict: false,
-            switchable: ["/y/*"],
+            switchables: ["/y/*"],
           },
         },
         force: false,
@@ -89,12 +89,12 @@ describe("switch registry", () => {
         tld: ".localhost",
         worktree: "feat",
         runId: "r2",
-        entries: {
+        proxies: {
           api: {
             range: "auto",
             strategy: "deterministic",
             strict: false,
-            switchable: ["/y/*"],
+            switchables: ["/y/*"],
           },
         },
         force: true,

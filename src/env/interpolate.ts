@@ -1,11 +1,11 @@
 /**
  * @module orchport/env/interpolate
- * Template substitution for config `env` values: `${entries.web.port}` or shorthand `${web.port}` (when the entry name does not shadow `sld`, `tld`, `worktree`, …). `${workspace}` is an alias for `${sld}`.
+ * Template substitution for config `env` values: `${proxies.web.port}` or shorthand `${web.port}` (when the proxy name does not shadow `sld`, `tld`, `worktree`, …). `${workspace}` is an alias for `${sld}`.
  */
-import { OrchportError } from "../utils/errors.ts";
+import { ErrorCode, OrchportError } from "../utils/errors.ts";
 import { isRecord } from "../utils/pick.ts";
 
-export type InterpolateEntries = Record<
+export type InterpolateProxyShapes = Record<
   string,
   { port: number; url: string; localUrl: string }
 >;
@@ -15,7 +15,7 @@ export type InterpolateCtx = {
   tld: string;
   worktree: string;
   worktreeHostPrefix: string;
-  entries: InterpolateEntries;
+  proxies: InterpolateProxyShapes;
   proxyPort?: number;
 };
 
@@ -34,14 +34,14 @@ const dotPath = (obj: unknown, path: string): unknown => {
   return cur;
 };
 
-/** Root keys reserved for the interpolation context; entry names equal to these use only `${entries.<name>.*}`. */
+/** Root keys reserved for the interpolation context; proxy names equal to these use only `${proxies.<name>.*}`. */
 const RESERVED_TEMPLATE_ROOT_KEYS = new Set([
   "sld",
   "tld",
   "workspace",
   "worktree",
   "worktreeHostPrefix",
-  "entries",
+  "proxies",
   "proxyPort",
 ]);
 
@@ -54,10 +54,10 @@ export const buildInterpolateRoot = (
     workspace: ctx.sld,
     worktree: ctx.worktree,
     worktreeHostPrefix: ctx.worktreeHostPrefix,
-    entries: ctx.entries,
+    proxies: ctx.proxies,
     proxyPort: ctx.proxyPort,
   };
-  for (const [name, shape] of Object.entries(ctx.entries)) {
+  for (const [name, shape] of Object.entries(ctx.proxies)) {
     if (!RESERVED_TEMPLATE_ROOT_KEYS.has(name)) {
       root[name] = shape;
     }
@@ -66,7 +66,7 @@ export const buildInterpolateRoot = (
 };
 
 /**
- * Interpolate `${entries.web.port}` or `${web.port}`-style templates against a plain context object.
+ * Interpolate `${proxies.web.port}` or `${web.port}`-style templates against a plain context object.
  */
 export const interpolateString = (
   template: string,
@@ -77,8 +77,12 @@ export const interpolateString = (
     const v = dotPath(root, trimmed);
     if (v === undefined || v === null) {
       throw new OrchportError(
-        "INTERPOLATE",
-        `Missing template value for \${${trimmed}}`
+        ErrorCode.INTERPOLATE,
+        `Missing template value for \${${trimmed}}`,
+        {
+          hint: "Check the key path exists on `proxies`, `sld`, `tld`, `worktree`, or `proxyPort`.",
+          context: { expr: trimmed },
+        }
       );
     }
     return String(v);

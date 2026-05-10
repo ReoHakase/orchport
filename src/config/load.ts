@@ -11,7 +11,7 @@ import { getLogger } from "@logtape/logtape";
 import * as v from "valibot";
 import { parse as parseYaml } from "yaml";
 
-import { OrchportError } from "../utils/errors.ts";
+import { ErrorCode, OrchportError } from "../utils/errors.ts";
 import { isRecord } from "../utils/pick.ts";
 import { isEnvFn, isUrlFn } from "./guards.ts";
 import { rawConfigSchema, type LoadedConfig } from "./schema.ts";
@@ -47,8 +47,12 @@ const extractPackageOrchport = async (
   const j: unknown = parseJsonConfig(text);
   if (!isRecord(j) || !isRecord(j.orchport)) {
     throw new OrchportError(
-      "CONFIG_PACKAGE",
-      `package.json has no "orchport" field at ${pkgPath}`
+      ErrorCode.CONFIG_PACKAGE,
+      `package.json has no "orchport" field at ${pkgPath}`,
+      {
+        hint: 'Add an "orchport" key to package.json or use a standalone orchport.yaml / orchport.config.ts.',
+        context: { path: pkgPath },
+      }
     );
   }
   return j.orchport;
@@ -62,8 +66,12 @@ const loadModuleConfig = async (
   const exp: unknown = mod.default;
   if (!isRecord(exp)) {
     throw new OrchportError(
-      "CONFIG_EXPORT",
-      `Config module must default-export an object: ${abs}`
+      ErrorCode.CONFIG_EXPORT,
+      `Config module must default-export an object: ${abs}`,
+      {
+        hint: "Use `export default defineConfig({ ... })` (or a plain object) as the default export.",
+        context: { path: abs },
+      }
     );
   }
   return exp;
@@ -115,8 +123,12 @@ export const loadConfig = async (options: {
   const resolved = findConfigPath(options.cwd, options.config);
   if (!resolved) {
     throw new OrchportError(
-      "CONFIG_NOT_FOUND",
-      "No orchport config found (orchport.yaml, orchport.config.ts, …)"
+      ErrorCode.CONFIG_NOT_FOUND,
+      "No orchport config found (orchport.yaml, orchport.config.ts, …)",
+      {
+        hint: "Run `orchport init` or pass `--config <path>` from the project directory.",
+        context: { cwd: options.cwd },
+      }
     );
   }
 
@@ -130,14 +142,28 @@ export const loadConfig = async (options: {
     const text = await readFile(resolved, "utf8");
     const y: unknown = loadYamlConfig(text);
     if (!isRecord(y)) {
-      throw new OrchportError("CONFIG_PARSE", "Invalid YAML config root");
+      throw new OrchportError(
+        ErrorCode.CONFIG_PARSE,
+        "Invalid YAML config root",
+        {
+          hint: "Ensure the file parses as a YAML object at the top level.",
+          context: { path: resolved },
+        }
+      );
     }
     rawRoot = y;
   } else if (resolved.endsWith(".json")) {
     const text = await readFile(resolved, "utf8");
     const j: unknown = parseJsonConfig(text);
     if (!isRecord(j)) {
-      throw new OrchportError("CONFIG_PARSE", "Invalid JSON config root");
+      throw new OrchportError(
+        ErrorCode.CONFIG_PARSE,
+        "Invalid JSON config root",
+        {
+          hint: "Ensure the file parses as a JSON object at the top level.",
+          context: { path: resolved },
+        }
+      );
     }
     rawRoot = j;
   } else {
@@ -160,8 +186,11 @@ export const loadConfig = async (options: {
     String(legacyWs).trim() !== String(sldIn).trim()
   ) {
     throw new OrchportError(
-      "CONFIG",
-      'Set only one of "sld" or legacy "workspace" (they must match if both are present)'
+      ErrorCode.CONFIG_CONFLICT,
+      'Set only one of "sld" or legacy "workspace" (they must match if both are present)',
+      {
+        hint: "Rename or remove one field; prefer `sld` over deprecated `workspace`.",
+      }
     );
   }
   if (sldIn === undefined && legacyWs !== undefined) {
@@ -177,9 +206,9 @@ export const loadConfig = async (options: {
           proxy: { ...parsedBase.proxy, tls: "dev" as const },
         }
       : parsedBase;
-  log.debug("Config parsed mode={mode} entries={entries} proxy.tls={tls}", {
+  log.debug("Config parsed mode={mode} proxies={proxies} proxy.tls={tls}", {
     mode: parsed.mode ?? "local-port",
-    entries: Object.keys(parsed.entries).toSorted().join(","),
+    proxies: Object.keys(parsed.proxies).toSorted().join(","),
     tls:
       parsed.proxy?.tls === false
         ? "false"

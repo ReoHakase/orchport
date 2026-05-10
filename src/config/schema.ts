@@ -10,53 +10,57 @@ export const portPickStrategies = [
 export type PortPickStrategy = (typeof portPickStrategies)[number];
 
 /** Inclusive port range for probing `[min, max]` (or fixed port when `min === max`). */
-const entryPortRangeTuple = v.pipe(
+const proxyPortRangeTuple = v.pipe(
   v.tuple([
     v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(65535)),
     v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(65535)),
   ]),
   v.check(
     (t): t is [number, number] => t[0] <= t[1],
-    "Entry port range: min must be <= max"
+    "Proxy port range: min must be <= max"
   )
 );
 
-const rangeValue = v.union([v.literal("auto"), entryPortRangeTuple]);
+const rangeValue = v.union([v.literal("auto"), proxyPortRangeTuple]);
 
-const switchableInput = v.optional(v.union([v.string(), v.array(v.string())]));
+const envRecord = v.record(
+  v.string(),
+  v.union([v.string(), v.number(), v.boolean(), v.null()])
+);
 
-const entryObjectInput = v.strictObject({
+const proxyObjectInput = v.strictObject({
   range: v.optional(rangeValue, "auto"),
   strategy: v.optional(v.picklist(portPickStrategies), "deterministic"),
   strict: v.optional(v.boolean(), false),
-  /** Path patterns (exact or `/prefix/*`) routed to the worktree in switches.json (OAuth callbacks, etc.). */
-  switchable: switchableInput,
+  /** Path patterns (exact or `/prefix/*`) for path-based proxy switching; always an array in config. */
+  switchables: v.optional(v.array(v.string())),
+  env: v.optional(envRecord),
 });
 
-const entryInput = v.union([v.literal(true), entryObjectInput]);
+const proxyInput = v.union([v.literal(true), proxyObjectInput]);
 
-export type EntryConfig = {
+export type ProxyConfig = {
   range: "auto" | [number, number];
   strategy: PortPickStrategy;
   strict: boolean;
   /** Normalized path patterns for path-based proxy switching. */
-  switchable?: string[];
+  switchables?: string[];
+  env?: Record<string, string | number | boolean | null>;
 };
 
-const normalizeSwitchableField = (
-  raw: string | string[] | undefined
+const normalizeSwitchablesField = (
+  raw: string[] | undefined
 ): string[] | undefined => {
-  if (raw === undefined) {
+  if (raw === undefined || raw.length === 0) {
     return undefined;
   }
-  const list = Array.isArray(raw) ? raw : [raw];
-  const out = list.map((p) => normalizeSwitchPattern(p));
+  const out = raw.map((p) => normalizeSwitchPattern(p));
   return out.length > 0 ? out : undefined;
 };
 
-export const entrySchema = v.pipe(
-  entryInput,
-  v.transform((input): EntryConfig => {
+export const proxySchema = v.pipe(
+  proxyInput,
+  v.transform((input): ProxyConfig => {
     if (input === true) {
       return {
         range: "auto",
@@ -68,7 +72,8 @@ export const entrySchema = v.pipe(
       range: input.range ?? "auto",
       strategy: input.strategy ?? "deterministic",
       strict: input.strict ?? false,
-      switchable: normalizeSwitchableField(input.switchable),
+      switchables: normalizeSwitchablesField(input.switchables),
+      ...(input.env !== undefined ? { env: input.env } : {}),
     };
   })
 );
@@ -116,13 +121,14 @@ export const rawConfigSchema = v.object({
       ),
     })
   ),
-  entries: v.record(v.string(), entrySchema),
-  env: v.optional(
-    v.record(
-      v.string(),
-      v.union([v.string(), v.number(), v.boolean(), v.null()])
+  proxies: v.pipe(
+    v.record(v.string(), proxySchema),
+    v.check(
+      (r: Record<string, ProxyConfig>) => Object.keys(r).length > 0,
+      "Config must define at least one key under `proxies:`"
     )
   ),
+  env: v.optional(envRecord),
 });
 
 /** After `v.parse` / load (defaults applied). */
@@ -134,7 +140,7 @@ export type RawConfigInput = v.InferInput<typeof rawConfigSchema> & {
   workspace?: string;
 };
 
-export type ResolvedEntryShape = {
+export type ResolvedProxyShape = {
   name: string;
   port: number;
   host: string;
@@ -143,7 +149,7 @@ export type ResolvedEntryShape = {
 };
 
 export type UrlFn = (ctx: {
-  entry: ResolvedEntryShape;
+  proxy: ResolvedProxyShape;
   sld: string;
   tld: string;
   worktree: string;
@@ -155,7 +161,7 @@ export type UrlFn = (ctx: {
 }) => string;
 
 export type EnvFn = (ctx: {
-  entries: Record<string, ResolvedEntryShape>;
+  proxies: Record<string, ResolvedProxyShape>;
   sld: string;
   tld: string;
   worktree: string;
