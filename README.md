@@ -49,6 +49,7 @@ With Bun:
 
 ```bash
 bun add -D orchport
+bun pm trust orchport
 ```
 
 With Nix flakes:
@@ -57,7 +58,7 @@ With Nix flakes:
 nix profile install github:ReoHakase/orchport
 ```
 
-Orchport is distributed as a precompiled Bun single-file executable created with `bun build --compile`. The npm package does not compile Orchport on the user's machine; it is a small shim that downloads the matching binary from GitHub Releases during `postinstall` and verifies it with `SHA256SUMS`.
+Orchport is distributed as a precompiled Bun single-file executable created with `bun build --compile`. The npm package does not compile Orchport on the user's machine; it is a small shim that downloads the matching binary from GitHub Releases during `postinstall` and verifies it with `SHA256SUMS`. Bun blocks dependency lifecycle scripts unless a package is trusted, so Bun projects must run `bun pm trust orchport` once to allow that `postinstall` download.
 
 The Nix flake also packages those prebuilt release binaries. It does not rebuild the TypeScript source with Bun in the Nix sandbox.
 
@@ -84,7 +85,7 @@ This installs guidance for configuring `orchport.config.*`, wiring Turborepo or 
 Generate a config:
 
 ```bash
-orchport init --format ts
+orchport init
 ```
 
 Check that Orchport can read the config and state directory:
@@ -303,7 +304,7 @@ Each `proxies` entry can be `true`, `{}`, or a full object.
 
 | Command                      | Purpose                                                                                                                                                           |
 | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `orchport init`              | Create a starter config. Use `--format yaml`, `--format json`, or `--format ts`.                                                                                  |
+| `orchport init`              | Create a starter TypeScript config. Use `--format yaml` or `--format json` only when the repo already prefers those formats.                                      |
 | `orchport doctor`            | Check config loading and state-directory read/write access.                                                                                                       |
 | `orchport env`               | Print resolved environment values without running a child process. TTY output is grouped by proxy; use `--json`, `--shell`, `--dotenv`, or `--plain` for scripts. |
 | `orchport run`               | Resolve config, allocate ports, optionally start the proxy, then run a child command.                                                                             |

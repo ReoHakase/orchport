@@ -13,6 +13,7 @@ if (!existsSync(binary)) {
     [
       "orchport binary is not installed.",
       "Run `npm rebuild orchport` or reinstall the package.",
+      "If you use Bun, run `bun pm trust orchport` so Bun executes the postinstall binary download.",
       "Set ORCHPORT_BINARY_PATH to use a local binary override.",
       "",
     ].join("\n")

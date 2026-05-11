@@ -73,13 +73,16 @@ const jsonTemplate = `{
 }
 `;
 
-/** Writes `orchport.yaml` / `orchport.json` / `orchport.config.ts` starter config. */
+/** Writes `orchport.config.ts` / `orchport.yaml` / `orchport.json` starter config. */
 export const initCommand = define({
   name: "init",
   description: "Create an orchport config file in the current directory",
   examples: `
-# Default YAML: writes orchport.yaml
+# Default TypeScript: writes orchport.config.ts
 orchport init
+
+# YAML: writes orchport.yaml
+orchport init --format yaml
 
 # JSON: writes orchport.json
 orchport init --format json
@@ -94,7 +97,7 @@ orchport init --format ts --force
     format: {
       type: "enum",
       choices: ["ts", "yaml", "json"] as const,
-      default: "yaml",
+      default: "ts",
       description:
         "Config format to write: yaml -> orchport.yaml, json -> orchport.json, ts -> orchport.config.ts",
     },
@@ -110,7 +113,7 @@ orchport init --format ts --force
     const format: "ts" | "yaml" | "json" =
       formatRaw === "ts" || formatRaw === "yaml" || formatRaw === "json"
         ? formatRaw
-        : "yaml";
+        : "ts";
     const force = pickBoolean(ctx.values, "force") ?? false;
 
     const name =

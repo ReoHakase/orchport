@@ -500,12 +500,11 @@ orchport kill web --signal SIGKILL
 
 ```bash
 orchport init
-orchport init --format ts
 orchport init --format yaml
 orchport init --format json
 ```
 
-非interactiveなので、質問はしない。
+デフォルトは TypeScript の `orchport.config.ts`。非interactiveなので、質問はしない。
 既存ファイルがある場合は失敗する。上書きは `--force`。
 
 ```bash

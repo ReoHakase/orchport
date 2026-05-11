@@ -26,6 +26,21 @@ const linkLocalPackage = async (cwd: string): Promise<void> => {
 };
 
 describe("e2e init", () => {
+  test("defaults to TypeScript config", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "orchport-init-"));
+    await mkdir(cwd, { recursive: true });
+    await linkLocalPackage(cwd);
+    const state = await createTempStateDir();
+    const r = runOrchport(["init"], {
+      cwd,
+      env: { ORCHPORT_STATE_DIR: state },
+    });
+    expect(r.exitCode).toBe(0);
+    const text = await readFile(join(cwd, "orchport.config.ts"), "utf8");
+    expect(text).toContain('import { defineConfig } from "orchport";');
+    expect(text).toContain("local-proxy");
+  });
+
   test.each(formats)(
     "writes %s config matching the current schema",
     async (format) => {

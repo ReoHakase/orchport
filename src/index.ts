@@ -25,8 +25,9 @@ const main = async (): Promise<void> => {
     return;
   }
 
-  const logFlags = peekLogFlags(argv);
-  const jsonErrors = peekGlobalJsonErrorsFlag(argv);
+  const cliArgv = argv.length === 0 ? ["--help"] : argv;
+  const logFlags = peekLogFlags(cliArgv);
+  const jsonErrors = peekGlobalJsonErrorsFlag(cliArgv);
   await setupLogging(logFlags);
   log.trace("orchport {version} cwd={cwd}", {
     version: packageVersion(),
@@ -39,7 +40,7 @@ const main = async (): Promise<void> => {
     });
   }
   try {
-    await runCli(argv);
+    await runCli(cliArgv);
   } catch (e) {
     if (e instanceof OrchportError) {
       if (jsonErrors) {

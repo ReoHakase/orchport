@@ -20,6 +20,17 @@ const readPackageVersion = (): string => {
 };
 
 describe("e2e help", () => {
+  test("bare command prints root help", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "orchport-help-"));
+    await mkdir(cwd, { recursive: true });
+    const r = runOrchport([], { cwd });
+    expect(r.exitCode).toBe(0);
+    const out = r.stdout.toString();
+    expect(out).toContain("Non-interactive port and env resolver");
+    expect(out).toContain("orchport init");
+    expect(out).toContain("--version");
+  });
+
   test("root help keeps -v for verbose and --version long-only", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "orchport-help-"));
     await mkdir(cwd, { recursive: true });

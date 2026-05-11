@@ -99,7 +99,7 @@ Use these command shapes when documenting or wiring Orchport:
 
 | Command                                  | Use                                                                                                  |
 | ---------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `orchport init --format ts`              | Create `orchport.config.ts`; use `--format yaml` or `--format json` only when that matches the repo. |
+| `orchport init`                          | Create `orchport.config.ts`; use `--format yaml` or `--format json` only when that matches the repo. |
 | `orchport doctor`                        | Verify config loading plus state-directory read/write access.                                        |
 | `orchport env`                           | Show resolved env without running a child command; TTY output is grouped by proxy.                   |
 | `orchport env --json`                    | Machine-readable resolved env for scripts and tests.                                                 |
