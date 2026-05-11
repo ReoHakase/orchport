@@ -12,7 +12,7 @@ orchport の release / changelog / publish まわりを変更するときはこ�
 - Conventional Commit は履歴品質と commitlint のために使う。release bump / `CHANGELOG.md` / npm publish 判断は Changesets が担当する。
 - `feat:` や `fix:` の commit だけでは release しない。ユーザー向け挙動、CLI、package、install、release、docs の公開面を変える PR には `.changeset/*.md` を追加する。
 - release 不要の変更でも CI が changeset を要求する場合は、理由が明確なときだけ `bun changeset --empty` を使う。
-- `CHANGELOG.md` は手で直接編集しない。`.changeset/*.md` を書き、Version PR の `changeset version` に生成させる。
+- `CHANGELOG.md` は手で直接編集しない。`.changeset/*.md` を書き、Version PR の `changeset version` に生成させる。changelog は `@changesets/changelog-github` を使い、GitHub PR / commit links を付ける。
 - npm package は single-binary shim 方式。runtime dependency を増やさず、`postinstall` は GitHub Release の tarball と `SHA256SUMS` から binary を入れる。
 - Nix は GitHub Release tarball を使う。release 後に生成される `nix/release-hashes.json` を source of truth にする。
 - Release workflow が Version PR 作成時に `GitHub Actions is not permitted to create or approve pull requests` を出した場合は、repo setting の `Allow GitHub Actions to create and approve pull requests` を有効化するか、生成済み `changeset-release/main` から PR を手動作成する。publish path の失敗は隠さない。
