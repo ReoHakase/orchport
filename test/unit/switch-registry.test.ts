@@ -7,6 +7,7 @@ import {
   buildSwitchRegistryKey,
   claimSwitchSlotsForRun,
   readSwitchRegistry,
+  setSwitchTargetsFromConfig,
 } from "../../src/state/switch-registry.ts";
 import { OrchportError } from "../../src/utils/errors.ts";
 
@@ -60,7 +61,11 @@ describe("switch registry", () => {
           ?.targetWorktree
       ).toBe("main");
     } finally {
-      process.env.ORCHPORT_STATE_DIR = prev;
+      if (prev === undefined) {
+        delete process.env.ORCHPORT_STATE_DIR;
+      } else {
+        process.env.ORCHPORT_STATE_DIR = prev;
+      }
     }
   });
 
@@ -105,7 +110,11 @@ describe("switch registry", () => {
           ?.targetWorktree
       ).toBe("feat");
     } finally {
-      process.env.ORCHPORT_STATE_DIR = prev;
+      if (prev === undefined) {
+        delete process.env.ORCHPORT_STATE_DIR;
+      } else {
+        process.env.ORCHPORT_STATE_DIR = prev;
+      }
     }
   });
 
@@ -127,7 +136,78 @@ describe("switch registry", () => {
       const reg = await readSwitchRegistry();
       expect(reg.entries.k?.targetWorktree).toBe("wt");
     } finally {
-      process.env.ORCHPORT_STATE_DIR = prev;
+      if (prev === undefined) {
+        delete process.env.ORCHPORT_STATE_DIR;
+      } else {
+        process.env.ORCHPORT_STATE_DIR = prev;
+      }
+    }
+  });
+
+  test("corrupt switches.json is a structured parse error", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "orchport-sw-corrupt-"));
+    const prev = process.env.ORCHPORT_STATE_DIR;
+    process.env.ORCHPORT_STATE_DIR = stateDir;
+    try {
+      await writeFile(join(stateDir, "switches.json"), "{ nope", "utf8");
+      await expect(readSwitchRegistry()).rejects.toThrow(OrchportError);
+    } finally {
+      if (prev === undefined) {
+        delete process.env.ORCHPORT_STATE_DIR;
+      } else {
+        process.env.ORCHPORT_STATE_DIR = prev;
+      }
+    }
+  });
+
+  test("concurrent switch writes preserve all configured slots", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "orchport-sw-concurrent-"));
+    const prev = process.env.ORCHPORT_STATE_DIR;
+    process.env.ORCHPORT_STATE_DIR = stateDir;
+    try {
+      await Promise.all([
+        setSwitchTargetsFromConfig({
+          sld: "c",
+          tld: ".localhost",
+          targetWorktree: "one",
+          proxies: {
+            api: {
+              range: "auto",
+              strategy: "deterministic",
+              strict: false,
+              switchables: ["/api/*"],
+            },
+          },
+        }),
+        setSwitchTargetsFromConfig({
+          sld: "c",
+          tld: ".localhost",
+          targetWorktree: "two",
+          proxies: {
+            web: {
+              range: "auto",
+              strategy: "deterministic",
+              strict: false,
+              switchables: ["/web/*"],
+            },
+          },
+        }),
+      ]);
+      const reg = await readSwitchRegistry();
+      expect(
+        reg.entries[buildSwitchRegistryKey("c", ".localhost", "api", "/api/*")]
+          ?.targetWorktree
+      ).toBe("one");
+      expect(
+        reg.entries[buildSwitchRegistryKey("c", ".localhost", "web", "/web/*")]
+          ?.targetWorktree
+      ).toBe("two");
+    } finally {
+      if (prev === undefined) {
+        delete process.env.ORCHPORT_STATE_DIR;
+      } else {
+        process.env.ORCHPORT_STATE_DIR = prev;
+      }
     }
   });
 });

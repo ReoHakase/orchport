@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -122,7 +122,54 @@ describe("e2e env proxy target", () => {
     expect(web.PORT).toBe("45692");
   });
 
-  test("env --plain without target prints sectioned output", async () => {
+  test("env --proxy on local-port config emits proxy public URLs", async () => {
+    const cwd = await writeConfig();
+    const state = await createTempStateDir();
+    const r = runOrchport(["env", "--proxy", "--plain"], {
+      cwd,
+      env: { ORCHPORT_STATE_DIR: state },
+    });
+    expect(r.exitCode).toBe(0);
+    const lines = Object.fromEntries(
+      r.stdout
+        .toString()
+        .trim()
+        .split("\n")
+        .map((line) => {
+          const eq = line.indexOf("=");
+          return [line.slice(0, eq), line.slice(eq + 1)];
+        })
+    );
+    expect(lines.ORCHPORT_MODE).toBe("local-proxy");
+    expect(lines.ORCHPORT_PROXY_PORT).toBeDefined();
+    expect(lines.ORCHPORT_API_URL).toBe(
+      `http://api.env-target.localhost:${lines.ORCHPORT_PROXY_PORT}`
+    );
+    expect(lines.ORCHPORT_API_LOCAL_URL).toBe("http://localhost:45691");
+  });
+
+  test("env keeps working when state dir is unwritable and reports disabled reservations", async () => {
+    if (typeof process.getuid === "function" && process.getuid() === 0) {
+      return;
+    }
+    const cwd = await writeConfig();
+    const state = await createTempStateDir();
+    await chmod(state, 0o500);
+    try {
+      const r = runOrchport(["env", "--plain"], {
+        cwd,
+        env: { ORCHPORT_STATE_DIR: state },
+      });
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout.toString()).toContain(
+        "ORCHPORT_PORT_RESERVATION=disabled\n"
+      );
+    } finally {
+      await chmod(state, 0o700);
+    }
+  });
+
+  test("env --plain without target prints a flat generated env stream", async () => {
     const cwd = await writeConfig();
     const state = await createTempStateDir();
     const r = runOrchport(["env", "--plain"], {
@@ -131,20 +178,13 @@ describe("e2e env proxy target", () => {
     });
     expect(r.exitCode).toBe(0);
     const out = r.stdout.toString();
-    expect(out).toContain("[global]\n");
-    expect(out).toContain("[api]\n");
-    expect(out).toContain("[web]\n");
-    expect(out).toContain("PORT=45691\n");
-    expect(out).toContain("PORT=45692\n");
-    const apiSection = out.slice(
-      out.indexOf("[api]\n"),
-      out.indexOf("\n[web]\n")
-    );
-    const webSection = out.slice(out.indexOf("[web]\n"));
-    expect(apiSection).toContain("ORCHPORT_API_PORT=45691\n");
-    expect(apiSection).not.toContain("ORCHPORT_WEB_PORT=");
-    expect(webSection).toContain("ORCHPORT_WEB_PORT=45692\n");
-    expect(webSection).not.toContain("ORCHPORT_API_PORT=");
+    expect(out).not.toContain("[global]\n");
+    expect(out).not.toContain("[api]\n");
+    expect(out).not.toContain("[web]\n");
+    expect(out.split("\n")).not.toContain("PORT=");
+    expect(out).toContain("ORCHPORT_API_PORT=45691\n");
+    expect(out).toContain("ORCHPORT_WEB_PORT=45692\n");
+    expect(out).toContain("SHARED=both\n");
   });
 
   test("env unknown proxy fails with available proxy hint", async () => {

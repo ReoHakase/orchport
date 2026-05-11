@@ -14,7 +14,7 @@ import {
 } from "../cli/format.ts";
 import { loadConfig } from "../config/load.ts";
 import { resolveProxyIdentity } from "../core/proxy-identity.ts";
-import { pickPortInRange } from "../ports/allocate.ts";
+import { isLocalPortFree, pickPortInRange } from "../ports/allocate.ts";
 import { ProxyRouteWatcher } from "../proxy/route-watcher.ts";
 import {
   startReverseProxy,
@@ -22,6 +22,7 @@ import {
 } from "../proxy/server.ts";
 import {
   isValidTcpPort,
+  proxyTlsHostnames,
   resolveProxyTlsMaterial,
   selectExtraProxyPort,
   toProxyTls,
@@ -49,6 +50,39 @@ const ORCHPORT_ELEVATED_PROXY = "ORCHPORT_ELEVATED_PROXY";
 
 const sleep = (ms: number): Promise<void> =>
   new Promise((r) => setTimeout(r, ms));
+
+const pickDaemonProxyPort = async (options: {
+  configured: false | "auto" | number | undefined;
+  sld: string;
+  worktree: string;
+  min: number;
+  max: number;
+}): Promise<number> => {
+  if (typeof options.configured === "number") {
+    if (!(await isLocalPortFree(options.configured))) {
+      throw new OrchportError(
+        ErrorCode.PORT_IN_USE,
+        `Configured proxy port ${options.configured} is not available`,
+        {
+          hint: 'Free the port, set `proxy.port: "auto"`, or choose another proxy port.',
+          context: {
+            port: String(options.configured),
+            entry: "__orchport_daemon__",
+          },
+        }
+      );
+    }
+    return options.configured;
+  }
+  return pickPortInRange({
+    sld: options.sld,
+    worktree: options.worktree,
+    entryName: "__orchport_daemon__",
+    min: options.min,
+    max: options.max,
+    avoid: new Set(),
+  });
+};
 
 /** Poll until `daemon.json` reflects the spawned child PID or the child dies / timeout. */
 const waitForDaemonReady = async (
@@ -230,13 +264,22 @@ export const proxyCommand = define({
     });
 
     const [pMin, pMax] = config.portRange ?? [43100, 43999];
-    const proxyPort = await pickPortInRange({
+    if (pMin > pMax) {
+      throw new OrchportError(
+        ErrorCode.PORT_RANGE,
+        `portRange invalid: ${pMin}-${pMax}`,
+        {
+          hint: "Set portRange to [min, max] with min <= max (inclusive).",
+          context: { min: String(pMin), max: String(pMax) },
+        }
+      );
+    }
+    const proxyPort = await pickDaemonProxyPort({
+      configured: config.proxy?.port,
       sld: id.sld,
       worktree: id.worktree,
-      entryName: "__orchport_daemon__",
       min: pMin,
       max: pMax,
-      avoid: new Set(),
     });
 
     const { fileTls, devTlsCleanup } = resolveProxyTlsMaterial({
@@ -245,6 +288,15 @@ export const proxyCommand = define({
       tld: id.tld,
       worktreeHostPrefix: id.worktreeHostPrefix,
     });
+    const tlsHosts =
+      config.proxy?.tls === "dev"
+        ? proxyTlsHostnames({
+            config,
+            sld: id.sld,
+            tld: id.tld,
+            worktreeHostPrefix: id.worktreeHostPrefix,
+          })
+        : [];
     const extraHttpsPort = selectExtraProxyPort({
       httpsPort: config.proxy?.httpsPort,
       tlsActive: fileTls !== undefined,
@@ -321,7 +373,7 @@ export const proxyCommand = define({
     await mkdir(routesDir, { recursive: true });
 
     const watcher = new ProxyRouteWatcher(routesDir);
-    watcher.startWatching();
+    await watcher.startWatching();
     const resolver = watcher.getResolver();
 
     const emptyRoutes = new Map<string, number>();
@@ -374,7 +426,14 @@ export const proxyCommand = define({
       mainPort: proxyPort,
       httpsPort,
       tls: Boolean(fileTls),
+      tlsKind:
+        config.proxy?.tls === "dev"
+          ? "dev"
+          : config.proxy?.tls && typeof config.proxy.tls === "object"
+            ? "file"
+            : "none",
       certPath: fileTls?.cert ?? null,
+      tlsHosts,
       startedAt: new Date().toISOString(),
     };
     await writeProxyDaemonState(state);

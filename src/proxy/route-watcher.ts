@@ -86,7 +86,6 @@ export class ProxyRouteWatcher {
       this.registrations = [];
       return;
     }
-    const next = new Map<string, number>();
     const regs: ProxyRouteRegistrationFile[] = [];
     /* Sequential reads keep behavior predictable under rapid edits. */
     /* eslint-disable-next-line no-await-in-loop */
@@ -111,11 +110,18 @@ export class ProxyRouteWatcher {
           continue;
         }
         regs.push(reg);
-        for (const [host, port] of Object.entries(reg.routes)) {
-          next.set(host.toLowerCase(), port);
-        }
       } catch {
         /* skip */
+      }
+    }
+    regs.sort((a, b) => {
+      const byTime = a.createdAt.localeCompare(b.createdAt);
+      return byTime === 0 ? a.runId.localeCompare(b.runId) : byTime;
+    });
+    const next = new Map<string, number>();
+    for (const reg of regs) {
+      for (const [host, port] of Object.entries(reg.routes)) {
+        next.set(host.toLowerCase(), port);
       }
     }
     this.registrations = regs;
@@ -135,8 +141,8 @@ export class ProxyRouteWatcher {
     }, 50);
   }
 
-  startWatching(): void {
-    void this.rebuild();
+  async startWatching(): Promise<void> {
+    await this.rebuild();
     try {
       this.watcher = watch(this.routesDir, { persistent: true }, () => {
         this.scheduleRebuild();
@@ -162,6 +168,7 @@ export class ProxyRouteWatcher {
   getResolver(): ProxyRouteResolver {
     return {
       getRoutes: () => this.mergedRoutes,
+      refresh: () => this.rebuild(),
       getSwitchRoutingForHost: (
         hostLower: string
       ): SwitchRoutingContext | undefined => {

@@ -50,13 +50,15 @@ const parseRunTarget = (
   tokens: string[],
   proxyNames: ReadonlySet<string>
 ): { runTarget?: string; childCmd: string[] } => {
-  const parts = tokens.filter((t) => t !== "--");
+  const parts = tokens[0] === "--" ? tokens.slice(1) : tokens;
   if (parts.length === 0) {
     return { childCmd: [] };
   }
   const first = parts[0];
   if (first !== undefined && proxyNames.has(first)) {
-    if (parts.length < 2) {
+    const tail = parts.slice(1);
+    const childCmd = tail[0] === "--" ? tail.slice(1) : tail;
+    if (childCmd.length < 1) {
       throw new OrchportError(
         ErrorCode.RUN_NO_COMMAND,
         `orchport run ${first} requires a command (e.g. orchport run ${first} -- bun dev)`,
@@ -65,7 +67,7 @@ const parseRunTarget = (
         }
       );
     }
-    return { runTarget: first, childCmd: parts.slice(1) };
+    return { runTarget: first, childCmd };
   }
   return { childCmd: parts };
 };
@@ -210,6 +212,12 @@ export const runCommand = define({
       humanStderr,
       `${statusIcon("info", ui)} workspace ${session.sld} / worktree ${session.worktree}`
     );
+    if (session.portReservation === "disabled") {
+      writeRunLine(
+        humanStderr,
+        `${statusIcon("warn", ui)} port collision protection disabled; state directory is unavailable`
+      );
+    }
 
     const childEnv: Record<string, string | undefined> = {
       ...process.env,
@@ -275,144 +283,163 @@ export const runCommand = define({
     let proxyStops: Array<() => void> = [];
     let devTlsCleanup: (() => void) | null = null;
     let fileTls: { cert: string; key: string; ca?: string } | undefined;
+    let usedDaemon = false;
+    let detachSignals: (() => void) | null = null;
+    let childExitCode: number | null = null;
 
-    const usedDaemon = await applyDaemonProxyIfRunning({
-      childEnv,
-      session,
-      config,
-      routes,
-      switchRouting,
-      runId,
-    });
-
-    if (!usedDaemon && session.proxyPort !== undefined && routes.size > 0) {
-      const r = startInProcessLocalProxy({
+    try {
+      usedDaemon = await applyDaemonProxyIfRunning({
         childEnv,
         session,
         config,
         routes,
         switchRouting,
-        values,
-        elevatedRunMarker: ORCHPORT_ELEVATED_RUN,
-        tryReexecWithSudo: reexecRunWithSudo,
+        runId,
       });
-      proxyStops = r.proxyStops;
-      devTlsCleanup = r.devTlsCleanup;
-      fileTls = r.fileTls;
-    }
 
-    if (session.proxyPort !== undefined) {
-      const scheme =
-        Object.values(childEnv).some(
-          (value) => typeof value === "string" && value.startsWith("https://")
-        ) || fileTls !== undefined
-          ? "HTTPS"
-          : "HTTP";
-      writeRunLine(
-        humanStderr,
-        `${statusIcon("info", ui)} proxy ${scheme} on :${childEnv.ORCHPORT_PROXY_PORT ?? String(session.proxyPort)}`
-      );
-      if (
-        session.env.ORCHPORT_HTTPS_PROXY_PORT !== undefined &&
-        childEnv.ORCHPORT_HTTPS_PROXY_PORT === undefined
-      ) {
+      if (!usedDaemon && session.proxyPort !== undefined && routes.size > 0) {
+        const r = startInProcessLocalProxy({
+          childEnv,
+          session,
+          config,
+          routes,
+          switchRouting,
+          values,
+          elevatedRunMarker: ORCHPORT_ELEVATED_RUN,
+          tryReexecWithSudo: reexecRunWithSudo,
+        });
+        proxyStops = r.proxyStops;
+        devTlsCleanup = r.devTlsCleanup;
+        fileTls = r.fileTls;
+      }
+
+      if (session.proxyPort !== undefined) {
+        const scheme =
+          Object.values(childEnv).some(
+            (value) => typeof value === "string" && value.startsWith("https://")
+          ) || fileTls !== undefined
+            ? "HTTPS"
+            : "HTTP";
         writeRunLine(
           humanStderr,
-          `${statusIcon("warn", ui)} extra HTTPS :${session.env.ORCHPORT_HTTPS_PROXY_PORT} unavailable; public URLs use :${childEnv.ORCHPORT_PROXY_PORT ?? String(session.proxyPort)}`
+          `${statusIcon("info", ui)} proxy ${scheme} on :${childEnv.ORCHPORT_PROXY_PORT ?? String(session.proxyPort)}`
+        );
+        if (
+          session.env.ORCHPORT_HTTPS_PROXY_PORT !== undefined &&
+          childEnv.ORCHPORT_HTTPS_PROXY_PORT === undefined
+        ) {
+          writeRunLine(
+            humanStderr,
+            `${statusIcon("warn", ui)} extra HTTPS :${session.env.ORCHPORT_HTTPS_PROXY_PORT} unavailable; public URLs use :${childEnv.ORCHPORT_PROXY_PORT ?? String(session.proxyPort)}`
+          );
+        }
+      }
+
+      if (fileTls) {
+        applyProxyTlsCertToChildEnv(childEnv, fileTls.cert);
+      }
+
+      const runState: RunStateFile = {
+        runId,
+        rootPid: process.pid,
+        command: childCmd,
+        workspace: session.sld,
+        worktree: session.worktree,
+        mode: session.mode,
+        createdAt: new Date().toISOString(),
+        configPath: session.configPath,
+        proxies: Object.fromEntries(
+          Object.keys(session.proxies).map((k) => {
+            const v = session.proxies[k];
+            const prefix = entryKeyToEnvPrefix(k);
+            return [
+              k,
+              {
+                port: v.port,
+                url: childEnv[`ORCHPORT_${prefix}_URL`] ?? v.url,
+                localUrl:
+                  childEnv[`ORCHPORT_${prefix}_LOCAL_URL`] ?? v.localUrl,
+              },
+            ];
+          })
+        ),
+        proxyPort:
+          childEnv.ORCHPORT_PROXY_PORT !== undefined
+            ? Number(childEnv.ORCHPORT_PROXY_PORT)
+            : session.proxyPort,
+      };
+      const persisted = await tryWriteRunState(runState);
+      if (!persisted) {
+        childEnv.ORCHPORT_VOLATILE_STATE = "1";
+        log.warning("run: state not persisted (ORCHPORT_VOLATILE_STATE=1)");
+      } else {
+        log.debug("run: wrote state runId={runId}", { runId });
+      }
+
+      log.info("run: spawning child cmd={cmd} runId={runId}", {
+        cmd: childCmd.join(" "),
+        runId,
+      });
+      writeRunLine(
+        humanStderr,
+        `${statusIcon("info", ui)} command ${childCmd.join(" ")}`
+      );
+      writeRunLine(humanStderr, `${muted(`run ${runId}`, ui)}\n`);
+      log.trace("run: child env ORCHPORT_* count={n}", {
+        n: String(
+          Object.keys(childEnv).filter(
+            (k) => k.startsWith("ORCHPORT") && childEnv[k] !== undefined
+          ).length
+        ),
+      });
+      const child = spawnInherit({ cmd: childCmd, env: childEnv, cwd });
+      detachSignals = forwardSignalsToChild(child);
+      const code = await child.exited;
+      childExitCode = code;
+      log.info("run: child exited code={code} runId={runId}", {
+        code: String(code),
+        runId,
+      });
+      const ok = code === 0;
+      writeRunLine(
+        humanStderr,
+        `${statusIcon(ok ? "ok" : "error", ui)} child exited ${code}  ${muted(`run ${runId}`, ui)}`
+      );
+      if (!ok) {
+        writeRunLine(
+          humanStderr,
+          formatNextLine(
+            "inspect the child command output above and rerun after fixing it.",
+            ui
+          ).trimEnd()
         );
       }
+    } finally {
+      if (detachSignals !== null) {
+        detachSignals();
+      }
+      if (usedDaemon) {
+        await cleanupDaemonRouteRegistration(runId).catch((err) => {
+          const message = err instanceof Error ? err.message : String(err);
+          log.warning("run: failed to clean daemon route {runId}: {message}", {
+            runId,
+            message,
+          });
+        });
+      }
+      for (let i = proxyStops.length - 1; i >= 0; i--) {
+        proxyStops[i]();
+      }
+      log.debug("run: stopped {n} proxy listener(s)", {
+        n: String(proxyStops.length),
+      });
+      if (devTlsCleanup) {
+        devTlsCleanup();
+        log.trace("run: dev TLS temp files removed");
+      }
     }
-
-    if (fileTls) {
-      applyProxyTlsCertToChildEnv(childEnv, fileTls.cert);
+    if (childExitCode !== null) {
+      process.exitCode = childExitCode;
     }
-
-    const runState: RunStateFile = {
-      runId,
-      rootPid: process.pid,
-      command: childCmd,
-      workspace: session.sld,
-      worktree: session.worktree,
-      mode: session.mode,
-      createdAt: new Date().toISOString(),
-      configPath: session.configPath,
-      proxies: Object.fromEntries(
-        Object.keys(session.proxies).map((k) => {
-          const v = session.proxies[k];
-          const prefix = entryKeyToEnvPrefix(k);
-          return [
-            k,
-            {
-              port: v.port,
-              url: childEnv[`ORCHPORT_${prefix}_URL`] ?? v.url,
-              localUrl: childEnv[`ORCHPORT_${prefix}_LOCAL_URL`] ?? v.localUrl,
-            },
-          ];
-        })
-      ),
-      proxyPort:
-        childEnv.ORCHPORT_PROXY_PORT !== undefined
-          ? Number(childEnv.ORCHPORT_PROXY_PORT)
-          : session.proxyPort,
-    };
-    const persisted = await tryWriteRunState(runState);
-    if (!persisted) {
-      childEnv.ORCHPORT_VOLATILE_STATE = "1";
-      log.warning("run: state not persisted (ORCHPORT_VOLATILE_STATE=1)");
-    } else {
-      log.debug("run: wrote state runId={runId}", { runId });
-    }
-
-    log.info("run: spawning child cmd={cmd} runId={runId}", {
-      cmd: childCmd.join(" "),
-      runId,
-    });
-    writeRunLine(
-      humanStderr,
-      `${statusIcon("info", ui)} command ${childCmd.join(" ")}`
-    );
-    writeRunLine(humanStderr, `${muted(`run ${runId}`, ui)}\n`);
-    log.trace("run: child env ORCHPORT_* count={n}", {
-      n: String(
-        Object.keys(childEnv).filter(
-          (k) => k.startsWith("ORCHPORT") && childEnv[k] !== undefined
-        ).length
-      ),
-    });
-    const child = spawnInherit({ cmd: childCmd, env: childEnv, cwd });
-    const detach = forwardSignalsToChild(child);
-    const code = await child.exited;
-    log.info("run: child exited code={code} runId={runId}", {
-      code: String(code),
-      runId,
-    });
-    const ok = code === 0;
-    writeRunLine(
-      humanStderr,
-      `${statusIcon(ok ? "ok" : "error", ui)} child exited ${code}  ${muted(`run ${runId}`, ui)}`
-    );
-    if (!ok) {
-      process.stderr.write(
-        formatNextLine(
-          "inspect the child command output above and rerun after fixing it.",
-          ui
-        )
-      );
-    }
-    detach();
-    if (usedDaemon) {
-      await cleanupDaemonRouteRegistration(runId);
-    }
-    for (let i = proxyStops.length - 1; i >= 0; i--) {
-      proxyStops[i]();
-    }
-    log.debug("run: stopped {n} proxy listener(s)", {
-      n: String(proxyStops.length),
-    });
-    if (devTlsCleanup) {
-      devTlsCleanup();
-      log.trace("run: dev TLS temp files removed");
-    }
-    process.exitCode = code;
   },
 });

@@ -101,7 +101,7 @@ worktree や agent ごとに **ベースドメインやポートをずらす**�
 
 上記の変数束ねは **orchport** の設定 `env` でテンプレート化できる。サンプルは [test/e2e/fixtures/target-like-yaml/orchport.yaml](test/e2e/fixtures/target-like-yaml/orchport.yaml)（同等の JSON / TS は `target-like-json` / `target-like-ts`）。CLI は `npm install -g orchport` または `nix profile install github:ReoHakase/orchport` で導入する。ルートで `orchport run -- turbo dev` のように叩く。ラップするコマンドに **`--` 以降**で `-` 付きオプションを渡す（例: `orchport run -- pnpm exec vite --port $ORCHPORT_WEB_PORT`）。state や run 記録の置き場は `ORCHPORT_STATE_DIR` または XDG 準拠の `~/.local/state/orchport`。
 
-人間向け出力は `env` / `list` / `switch` / `doctor` で状態記号と次アクションを出す。script では `env <proxy> --json` / `--shell` / `--dotenv` / `--plain` を使う。`env` の proxy 未指定出力は `global` と各 proxy の section 表示で、`env <proxy>` は `run <proxy>` が注入する flat env を表示する。orchport が生成する `PORT` は proxy ごとの実 port で、config の `env.PORT` より優先される。
+人間向け出力は `env` / `list` / `switch` / `doctor` で状態記号と次アクションを出す。script では `env <proxy> --json` / `--shell` / `--dotenv` / `--plain` を使う。`env` の proxy 未指定 TTY 出力は `global` と各 proxy の section 表示、piped / `--plain` / `--shell` / `--dotenv` は 1 つの flat env stream、`--json` は nested global/proxies 形式。`env <proxy>` は `run <proxy>` が注入する flat env を表示する。orchport が生成する `PORT` は proxy ごとの実 port で、config の `env.PORT` より優先される。
 
 ```txt
 orchport env

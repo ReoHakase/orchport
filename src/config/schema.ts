@@ -99,7 +99,12 @@ export const rawConfigSchema = v.object({
   ),
   proxy: v.optional(
     v.object({
-      port: v.optional(v.union([v.literal("auto"), v.number()])),
+      port: v.optional(
+        v.union([
+          v.literal("auto"),
+          v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(65535)),
+        ])
+      ),
       /** Extra listener port; omit + TLS active → try **443**. `false` skips the extra listener. */
       httpsPort: v.optional(
         v.union([

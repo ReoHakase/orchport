@@ -89,15 +89,21 @@ export const doctorCommand = define({
       formatCliOkLine("state", `${state} (read/write ok)`, { tty })
     );
 
+    let failed = false;
+    let needsOpenSsl = false;
     try {
       const cfg = await loadConfig({
         cwd,
         config: pickString(ctx.values, "config"),
       });
+      needsOpenSsl =
+        (cfg.mode ?? "local-port") === "local-proxy" &&
+        cfg.proxy?.tls === "dev";
       process.stdout.write(
         formatCliOkLine("config", cfg.configPath ?? "(inline)", { tty })
       );
     } catch (e) {
+      failed = true;
       const msg = e instanceof Error ? e.message : String(e);
       process.stdout.write(formatCliFailLine("config", msg, { tty }));
       process.stdout.write(
@@ -105,28 +111,35 @@ export const doctorCommand = define({
       );
     }
 
-    const oc = spawnSync("openssl", ["version"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    if (oc.status === 0) {
+    if (!needsOpenSsl) {
       process.stdout.write(
-        formatCliOkLine("openssl", oc.stdout?.trim() || "ok", { tty })
+        formatCliOkLine("openssl", "not required by current config", { tty })
       );
     } else {
-      process.stdout.write(
-        formatCliFailLine(
-          "openssl",
-          "not found or failed (needed for dev TLS)",
-          { tty }
-        )
-      );
-      process.stdout.write(
-        formatNextLine(
-          "install OpenSSL or configure file-based TLS certificates.",
-          ui
-        )
-      );
+      const oc = spawnSync("openssl", ["version"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      if (oc.status === 0) {
+        process.stdout.write(
+          formatCliOkLine("openssl", oc.stdout?.trim() || "ok", { tty })
+        );
+      } else {
+        failed = true;
+        process.stdout.write(
+          formatCliFailLine(
+            "openssl",
+            "not found or failed (needed for dev TLS)",
+            { tty }
+          )
+        );
+        process.stdout.write(
+          formatNextLine(
+            "install OpenSSL or configure file-based TLS certificates.",
+            ui
+          )
+        );
+      }
     }
 
     const daemon = readProxyDaemonState();
@@ -149,6 +162,7 @@ export const doctorCommand = define({
         )
       );
     } else {
+      failed = true;
       process.stdout.write(
         formatCliFailLine(
           "proxy",
@@ -165,6 +179,9 @@ export const doctorCommand = define({
     }
 
     process.stdout.write("\n");
+    if (failed) {
+      process.exitCode = 1;
+    }
     log.debug("doctor: done");
   },
 });

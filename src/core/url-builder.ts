@@ -11,11 +11,19 @@ export const buildEntryUrl = (options: {
   tld: string;
   worktree: string;
   worktreeHostPrefix: string;
+  mode?: "local-port" | "local-proxy";
   proxyPort?: number;
 }): string => {
-  const { config, proxy, sld, tld, worktree, worktreeHostPrefix, proxyPort } =
-    options;
-  const mode = config.mode ?? "local-port";
+  const {
+    config,
+    proxy,
+    sld,
+    tld,
+    worktree,
+    worktreeHostPrefix,
+    mode = config.mode ?? "local-port",
+    proxyPort,
+  } = options;
 
   if (typeof config.url === "function") {
     return config.url({

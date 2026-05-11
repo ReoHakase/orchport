@@ -4,7 +4,30 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { RunStateFile } from "../../src/state/types.ts";
-import { createTempStateDir, runOrchport } from "../helpers/index.ts";
+import {
+  closeServer,
+  createTempStateDir,
+  holdTcpPort,
+  runOrchport,
+} from "../helpers/index.ts";
+
+const waitForHttp = async (port: number): Promise<void> => {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    try {
+      /* eslint-disable-next-line no-await-in-loop -- sequential readiness poll */
+      const res = await fetch(`http://127.0.0.1:${port}`);
+      if (res.ok) {
+        return;
+      }
+    } catch {
+      /* server not ready yet */
+    }
+    /* eslint-disable-next-line no-await-in-loop -- sequential readiness poll */
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error(`server on ${port} did not become ready`);
+};
 
 describe("e2e kill / list", () => {
   test("list shows stale run; --stale removes state", async () => {
@@ -159,5 +182,83 @@ describe("e2e kill / list", () => {
       "https://api.myapp.test/auth/callback/* → http://localhost:8001/auth/callback/*"
     );
     expect(out).toContain("orchport kill --stale");
+  });
+
+  test("kill validates pid and signal usage", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "orchport-kl-usage-"));
+    await mkdir(cwd, { recursive: true });
+    const state = await createTempStateDir();
+
+    const badPid = runOrchport(["kill", "--pid", "nope"], {
+      cwd,
+      env: { ORCHPORT_STATE_DIR: state },
+    });
+    expect(badPid.exitCode).not.toBe(0);
+    expect(badPid.stderr.toString()).toContain("Invalid pid");
+
+    const badSignal = runOrchport(["kill", "web", "--signal", "NOPE"], {
+      cwd,
+      env: { ORCHPORT_STATE_DIR: state },
+    });
+    expect(badSignal.exitCode).not.toBe(0);
+    expect(badSignal.stderr.toString()).toContain("Unsupported signal");
+  });
+
+  test("kill URL target requires --force for a foreign listener", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "orchport-kl-url-"));
+    await mkdir(cwd, { recursive: true });
+    const state = await createTempStateDir();
+    const held = await holdTcpPort(0);
+    const addr = held.address();
+    if (
+      typeof addr !== "object" ||
+      addr === null ||
+      typeof addr.port !== "number"
+    ) {
+      await closeServer(held);
+      throw new Error("could not allocate test port");
+    }
+    const port = addr.port;
+    await closeServer(held);
+
+    const child = Bun.spawn({
+      cmd: [
+        "bun",
+        "-e",
+        `Bun.serve({ hostname: "127.0.0.1", port: ${port}, fetch: () => new Response("ok") }); await new Promise(() => {});`,
+      ],
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    try {
+      await waitForHttp(port);
+      const noForce = runOrchport(["kill", `http://localhost:${port}`], {
+        cwd,
+        env: { ORCHPORT_STATE_DIR: state },
+      });
+      expect(noForce.exitCode).not.toBe(0);
+      expect(noForce.stderr.toString()).toContain("--force");
+
+      const forced = runOrchport(
+        ["kill", `http://localhost:${port}`, "--force"],
+        {
+          cwd,
+          env: { ORCHPORT_STATE_DIR: state },
+        }
+      );
+      expect(forced.exitCode).toBe(0);
+      const code = await Promise.race([
+        child.exited,
+        new Promise<number>((_, reject) =>
+          setTimeout(
+            () => reject(new Error("foreign listener still alive")),
+            5_000
+          )
+        ),
+      ]);
+      expect(code).not.toBe(0);
+    } finally {
+      child.kill("SIGKILL");
+    }
   });
 });

@@ -23,6 +23,7 @@ const minimalSession = (): ResolvedSession => ({
     },
   },
   proxyPort: 44_000,
+  portReservation: "active",
   env: {},
   configPath: "/x/orchport.yaml",
 });

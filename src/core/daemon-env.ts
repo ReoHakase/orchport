@@ -30,6 +30,7 @@ export const applyDaemonEnvToChild = (
       tld: session.tld,
       worktree: session.worktree,
       worktreeHostPrefix: session.worktreeHostPrefix,
+      mode: session.mode,
       proxyPort,
     });
     childEnv[`ORCHPORT_${prefix}_LOCAL_URL`] = e.localUrl;

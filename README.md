@@ -282,7 +282,7 @@ Orchport searches upward from the current directory for one of:
 | `worktree`  | string                            | Defaults to the current git worktree name.                                                                                                          |
 | `mode`      | `"local-port"` or `"local-proxy"` | `local-port` resolves ports only. `local-proxy` also starts or uses a reverse proxy and emits public URLs.                                          |
 | `portRange` | `[number, number]`                | Default range for automatic allocation and fallback: `[43100, 43999]`.                                                                              |
-| `proxy`     | object                            | Reverse proxy options for `local-proxy`. `tls` defaults to `"dev"` unless explicitly disabled.                                                      |
+| `proxy`     | object                            | Reverse proxy options for `local-proxy`. `port` can require a main proxy port; `tls` defaults to `"dev"` unless explicitly disabled.                |
 | `proxies`   | object                            | Required service map. A key such as `web` produces `ORCHPORT_WEB_*` variables.                                                                      |
 | `env`       | object or function                | Extra environment values. Strings can interpolate `${web.url}`, `${api.port}`, and similar proxy values.                                            |
 
@@ -302,19 +302,19 @@ Each `proxies` entry can be `true`, `{}`, or a full object.
 
 ## Commands
 
-| Command                      | Purpose                                                                                                                                                           |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `orchport init`              | Create a starter TypeScript config. Use `--format yaml` or `--format json` only when the repo already prefers those formats.                                      |
-| `orchport doctor`            | Check config loading and state-directory read/write access.                                                                                                       |
-| `orchport env`               | Print resolved environment values without running a child process. TTY output is grouped by proxy; use `--json`, `--shell`, `--dotenv`, or `--plain` for scripts. |
-| `orchport run`               | Resolve config, allocate ports, optionally start the proxy, then run a child command.                                                                             |
-| `orchport run <proxy>`       | Run a child command with one proxy's flat environment, including `PORT`.                                                                                          |
-| `orchport list`              | Show recorded runs.                                                                                                                                               |
-| `orchport kill`              | Send a signal to processes recorded by prior runs.                                                                                                                |
-| `orchport switch <worktree>` | Point configured `switchables` paths at another worktree.                                                                                                         |
-| `orchport proxy up`          | Start a long-lived local proxy for `local-proxy` configs.                                                                                                         |
-| `orchport proxy down`        | Stop the recorded proxy daemon.                                                                                                                                   |
-| `orchport proxy status`      | Show proxy daemon status.                                                                                                                                         |
+| Command                      | Purpose                                                                                                                                                                   |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `orchport init`              | Create a starter TypeScript config. Use `--format yaml` or `--format json` only when the repo already prefers those formats.                                              |
+| `orchport doctor`            | Check config loading and state-directory read/write access.                                                                                                               |
+| `orchport env`               | Print resolved environment values without running a child process. TTY output is grouped by proxy; script output without a proxy target is one flat generated env stream. |
+| `orchport run`               | Resolve config, allocate ports, optionally start the proxy, then run a child command.                                                                                     |
+| `orchport run <proxy>`       | Run a child command with one proxy's flat environment, including `PORT`.                                                                                                  |
+| `orchport list`              | Show recorded runs.                                                                                                                                                       |
+| `orchport kill`              | Send a signal to processes recorded by prior runs.                                                                                                                        |
+| `orchport switch <worktree>` | Point configured `switchables` paths at another worktree.                                                                                                                 |
+| `orchport proxy up`          | Start a long-lived local proxy for `local-proxy` configs.                                                                                                                 |
+| `orchport proxy down`        | Stop the recorded proxy daemon.                                                                                                                                           |
+| `orchport proxy status`      | Show proxy daemon status.                                                                                                                                                 |
 
 Global options go before the subcommand:
 
@@ -337,18 +337,19 @@ Orchport always injects `ORCHPORT=1` plus generated `ORCHPORT_*` values.
 
 Common generated variables include:
 
-| Variable                    | Meaning                                        |
-| --------------------------- | ---------------------------------------------- |
-| `ORCHPORT_SLD`              | Resolved host label.                           |
-| `ORCHPORT_TLD`              | Resolved host suffix.                          |
-| `ORCHPORT_WORKTREE`         | Resolved worktree slug.                        |
-| `ORCHPORT_RUN_ID`           | Current run identifier.                        |
-| `ORCHPORT_<NAME>_PORT`      | Allocated local port for a proxy.              |
-| `ORCHPORT_<NAME>_HOST`      | Public host for a proxy.                       |
-| `ORCHPORT_<NAME>_URL`       | Public URL for a proxy.                        |
-| `ORCHPORT_<NAME>_LOCAL_URL` | Direct `http://localhost:<port>` URL.          |
-| `ORCHPORT_PROXY_PORT`       | Main reverse proxy port in `local-proxy` mode. |
-| `ORCHPORT_HTTPS_PROXY_PORT` | Extra HTTPS listener port when one is active.  |
+| Variable                    | Meaning                                                                                                     |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `ORCHPORT_SLD`              | Resolved host label.                                                                                        |
+| `ORCHPORT_TLD`              | Resolved host suffix.                                                                                       |
+| `ORCHPORT_WORKTREE`         | Resolved worktree slug.                                                                                     |
+| `ORCHPORT_RUN_ID`           | Current run identifier.                                                                                     |
+| `ORCHPORT_<NAME>_PORT`      | Allocated local port for a proxy.                                                                           |
+| `ORCHPORT_<NAME>_HOST`      | Public host for a proxy.                                                                                    |
+| `ORCHPORT_<NAME>_URL`       | Public URL for a proxy.                                                                                     |
+| `ORCHPORT_<NAME>_LOCAL_URL` | Direct `http://localhost:<port>` URL.                                                                       |
+| `ORCHPORT_PROXY_PORT`       | Main reverse proxy port in `local-proxy` mode.                                                              |
+| `ORCHPORT_HTTPS_PROXY_PORT` | Extra HTTPS listener port when one is active.                                                               |
+| `ORCHPORT_PORT_RESERVATION` | `active` when cross-process state locking protected this allocation; `disabled` when state was unavailable. |
 
 `ORCHPORT`, `ORCHPORT_*`, and legacy lowercase `orchport` / `orchport_*` names are reserved. User config cannot override them.
 
@@ -386,6 +387,8 @@ proxy: {
 ```
 
 If the extra listener cannot bind, Orchport keeps running on the main proxy port and rewrites generated public URLs accordingly.
+
+Set `proxy.port` when the main proxy itself must use a specific port. Omit it or set `"auto"` to use the normal allocator; a numeric value is required and startup fails clearly if that port is unavailable.
 
 ## Path Switching for OAuth Callbacks
 
@@ -437,7 +440,7 @@ Override it when needed:
 ORCHPORT_STATE_DIR=/tmp/orchport-state orchport run -- turbo dev
 ```
 
-Agent sandboxes such as Cursor, Codex, and Claude Code often restrict writes outside the workspace. If Orchport cannot write state, add the absolute state directory path to the agent's writable paths. `orchport doctor` prints the resolved path and verifies read/write access.
+Agent sandboxes such as Cursor, Codex, and Claude Code often restrict writes outside the workspace. If Orchport cannot write state, run/env still keep volatile behavior where possible, but cross-process port collision protection is disabled and `ORCHPORT_PORT_RESERVATION=disabled` is emitted. Add the absolute state directory path to the agent's writable paths. `orchport doctor` prints the resolved path, verifies read/write access, and exits nonzero on failed checks.
 
 ## Port Allocation
 
@@ -450,6 +453,7 @@ Orchport probes candidate ports by briefly listening on `127.0.0.1`.
 | `strategy: "deterministic"` | Hash `sld`, `worktree`, and proxy name to choose a stable starting point, then wrap through the range. |
 | `strict: true`              | Fail if the configured port or range is unavailable.                                                   |
 | `strict: false`             | Warn and fall back to the root `portRange` when possible.                                              |
+| `proxy.port: <number>`      | Require that main reverse-proxy port. Use `"auto"` or omit it for allocated high ports.                |
 
 The default root range is `[43100, 43999]`.
 

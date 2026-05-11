@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { mkdtemp } from "node:fs/promises";
+import type { Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -8,7 +9,23 @@ import {
   buildEnvByProxy,
   resolveSession,
 } from "../../src/core/resolve-session.ts";
-import { createTempStateDir, writeFixtureConfig } from "../helpers/index.ts";
+import {
+  closeServer,
+  createTempStateDir,
+  holdTcpPort,
+  writeFixtureConfig,
+} from "../helpers/index.ts";
+
+const requireServerPort = (address: ReturnType<Server["address"]>): number => {
+  if (
+    typeof address !== "object" ||
+    address === null ||
+    typeof address.port !== "number"
+  ) {
+    throw new Error("expected TCP server address");
+  }
+  return address.port;
+};
 
 describe("resolveSession", () => {
   test("local-port allocates proxies and env keys", async () => {
@@ -69,6 +86,134 @@ proxies:
         String(session.proxyPort ?? "")
       );
       expect(session.env.ORCHPORT_API_URL).toMatch(/^https:\/\//);
+    } finally {
+      if (prev === undefined) {
+        delete process.env.ORCHPORT_STATE_DIR;
+      } else {
+        process.env.ORCHPORT_STATE_DIR = prev;
+      }
+    }
+  });
+
+  test("proxy.port numeric value is the required main proxy port", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orchport-rs-proxy-port-"));
+    const held = await holdTcpPort(0);
+    const port = requireServerPort(held.address());
+    await closeServer(held);
+    await writeFixtureConfig(
+      dir,
+      "yaml",
+      `mode: local-port
+sld: rs-proxy-port
+worktree: main
+proxy:
+  port: ${port}
+  tls: false
+proxies:
+  web: true
+`
+    );
+    const state = await createTempStateDir();
+    const prev = process.env.ORCHPORT_STATE_DIR;
+    process.env.ORCHPORT_STATE_DIR = state;
+    try {
+      const config = await loadConfig({ cwd: dir });
+      const session = await resolveSession({
+        cwd: dir,
+        config,
+        runId: "rid-proxy-port",
+        withProxy: true,
+      });
+      expect(session.proxyPort).toBe(port);
+      expect(session.env.ORCHPORT_WEB_URL).toBe(
+        `http://web.rs-proxy-port.localhost:${port}`
+      );
+    } finally {
+      if (prev === undefined) {
+        delete process.env.ORCHPORT_STATE_DIR;
+      } else {
+        process.env.ORCHPORT_STATE_DIR = prev;
+      }
+    }
+  });
+
+  test("proxy.port fails clearly when unavailable", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orchport-rs-proxy-port-busy-"));
+    const held = await holdTcpPort(0);
+    const port = requireServerPort(held.address());
+    await writeFixtureConfig(
+      dir,
+      "yaml",
+      `mode: local-port
+sld: rs-proxy-port-busy
+worktree: main
+proxy:
+  port: ${port}
+  tls: false
+proxies:
+  web: true
+`
+    );
+    const state = await createTempStateDir();
+    const prev = process.env.ORCHPORT_STATE_DIR;
+    process.env.ORCHPORT_STATE_DIR = state;
+    try {
+      const config = await loadConfig({ cwd: dir });
+      await expect(
+        resolveSession({
+          cwd: dir,
+          config,
+          runId: "rid-proxy-port-busy",
+          withProxy: true,
+        })
+      ).rejects.toThrow("Configured proxy port");
+    } finally {
+      await closeServer(held);
+      if (prev === undefined) {
+        delete process.env.ORCHPORT_STATE_DIR;
+      } else {
+        process.env.ORCHPORT_STATE_DIR = prev;
+      }
+    }
+  });
+
+  test("concurrent resolutions reserve distinct auto ports in one state dir", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orchport-rs-concurrent-"));
+    await writeFixtureConfig(
+      dir,
+      "yaml",
+      `mode: local-port
+sld: rs-concurrent
+worktree: main
+portRange: [45801, 45803]
+proxies:
+  web: true
+`
+    );
+    const state = await createTempStateDir();
+    const prev = process.env.ORCHPORT_STATE_DIR;
+    process.env.ORCHPORT_STATE_DIR = state;
+    try {
+      const config = await loadConfig({ cwd: dir });
+      const [a, b] = await Promise.all([
+        resolveSession({
+          cwd: dir,
+          config,
+          runId: "rid-concurrent-a",
+          withProxy: false,
+        }),
+        resolveSession({
+          cwd: dir,
+          config,
+          runId: "rid-concurrent-b",
+          withProxy: false,
+        }),
+      ]);
+      expect(a.proxies.web.port).not.toBe(b.proxies.web.port);
+      expect(a.proxies.web.port).toBeGreaterThanOrEqual(45801);
+      expect(a.proxies.web.port).toBeLessThanOrEqual(45803);
+      expect(b.proxies.web.port).toBeGreaterThanOrEqual(45801);
+      expect(b.proxies.web.port).toBeLessThanOrEqual(45803);
     } finally {
       if (prev === undefined) {
         delete process.env.ORCHPORT_STATE_DIR;

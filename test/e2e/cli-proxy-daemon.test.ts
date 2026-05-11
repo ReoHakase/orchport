@@ -5,7 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { isRecord } from "../../src/utils/pick.ts";
-import { orchportCliEntry } from "../helpers/index.ts";
+import {
+  closeServer,
+  holdTcpPort,
+  orchportCliEntry,
+} from "../helpers/index.ts";
 
 describe("e2e proxy daemon", () => {
   test(
@@ -100,6 +104,205 @@ proxies:
         ),
       ]);
       expect(existsSync(daemonPath)).toBe(false);
+    },
+    { timeout: 60_000 }
+  );
+
+  test(
+    "daemon rewrites TLS public URLs to the main port when extra HTTPS is unavailable",
+    async () => {
+      const projectDir = await mkdtemp(join(tmpdir(), "orchport-pd-rewrite-"));
+      await mkdir(projectDir, { recursive: true });
+      const stateDir = await mkdtemp(join(tmpdir(), "orchport-pd-state-"));
+      await mkdir(stateDir, { recursive: true });
+      const held = await holdTcpPort(0);
+      const heldAddr = held.address();
+      if (
+        typeof heldAddr !== "object" ||
+        heldAddr === null ||
+        typeof heldAddr.port !== "number"
+      ) {
+        await closeServer(held);
+        throw new Error("could not read held port");
+      }
+
+      const yaml = `mode: local-proxy
+sld: daemon-rewrite
+worktree: main
+proxy:
+  tls: dev
+  httpsPort: ${heldAddr.port}
+proxies:
+  api: true
+env:
+  API_PUBLIC_URL: \${api.url}
+`;
+      await Bun.write(join(projectDir, "orchport.yaml"), yaml);
+
+      const cli = orchportCliEntry();
+      const proxyProc = Bun.spawn({
+        cmd: ["bun", cli, "proxy", "up"],
+        cwd: projectDir,
+        env: {
+          ...process.env,
+          ORCHPORT_STATE_DIR: stateDir,
+          NO_COLOR: "1",
+        },
+        stdout: "ignore",
+        stderr: "ignore",
+      });
+
+      const daemonPath = join(stateDir, "proxy", "daemon.json");
+      try {
+        const deadline = Date.now() + 15_000;
+        while (!existsSync(daemonPath)) {
+          if (Date.now() > deadline) {
+            proxyProc.kill("SIGKILL");
+            throw new Error("daemon.json did not appear");
+          }
+          /* eslint-disable-next-line no-await-in-loop -- sequential poll delay */
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        const rawDaemon: unknown = JSON.parse(readFileSync(daemonPath, "utf8"));
+        if (!isRecord(rawDaemon) || typeof rawDaemon.mainPort !== "number") {
+          proxyProc.kill("SIGKILL");
+          throw new Error("invalid daemon.json");
+        }
+        expect(rawDaemon.httpsPort).toBe(null);
+
+        const runChild = Bun.spawnSync({
+          cmd: [
+            "bun",
+            cli,
+            "run",
+            "--",
+            "sh",
+            "-c",
+            'printf "%s\\n%s\\n" "$ORCHPORT_API_URL" "$API_PUBLIC_URL"',
+          ],
+          cwd: projectDir,
+          env: {
+            ...process.env,
+            ORCHPORT_STATE_DIR: stateDir,
+            NO_COLOR: "1",
+          },
+          stderr: "pipe",
+          stdout: "pipe",
+        });
+        expect(runChild.exitCode).toBe(0);
+        const expected = `https://api.daemon-rewrite.localhost:${rawDaemon.mainPort}`;
+        expect(runChild.stdout.toString().trim().split("\n")).toEqual([
+          expected,
+          expected,
+        ]);
+
+        const down = Bun.spawnSync({
+          cmd: ["bun", cli, "proxy", "down"],
+          cwd: projectDir,
+          env: {
+            ...process.env,
+            ORCHPORT_STATE_DIR: stateDir,
+            NO_COLOR: "1",
+          },
+          stderr: "pipe",
+          stdout: "pipe",
+        });
+        expect(down.exitCode).toBe(0);
+        await Promise.race([
+          proxyProc.exited,
+          new Promise<number>((_, reject) =>
+            setTimeout(() => reject(new Error("proxy exit timeout")), 10_000)
+          ),
+        ]);
+      } finally {
+        await closeServer(held);
+        proxyProc.kill("SIGKILL");
+      }
+    },
+    { timeout: 60_000 }
+  );
+
+  test(
+    "daemon dev TLS rejects later run hostnames outside the generated certificate",
+    async () => {
+      const projectDir = await mkdtemp(join(tmpdir(), "orchport-pd-hosts-"));
+      await mkdir(projectDir, { recursive: true });
+      const stateDir = await mkdtemp(join(tmpdir(), "orchport-pd-state-"));
+      await mkdir(stateDir, { recursive: true });
+
+      const yaml = `mode: local-proxy
+sld: daemon-hosts
+worktree: main
+proxy:
+  tls: dev
+  httpsPort: false
+proxies:
+  api: true
+`;
+      await Bun.write(join(projectDir, "orchport.yaml"), yaml);
+
+      const cli = orchportCliEntry();
+      const proxyProc = Bun.spawn({
+        cmd: ["bun", cli, "proxy", "up"],
+        cwd: projectDir,
+        env: {
+          ...process.env,
+          ORCHPORT_STATE_DIR: stateDir,
+          NO_COLOR: "1",
+        },
+        stdout: "ignore",
+        stderr: "ignore",
+      });
+
+      const daemonPath = join(stateDir, "proxy", "daemon.json");
+      try {
+        const deadline = Date.now() + 15_000;
+        while (!existsSync(daemonPath)) {
+          if (Date.now() > deadline) {
+            proxyProc.kill("SIGKILL");
+            throw new Error("daemon.json did not appear");
+          }
+          /* eslint-disable-next-line no-await-in-loop -- sequential poll delay */
+          await new Promise((r) => setTimeout(r, 50));
+        }
+
+        const runChild = Bun.spawnSync({
+          cmd: ["bun", cli, "--worktree", "feature-auth", "run", "--", "true"],
+          cwd: projectDir,
+          env: {
+            ...process.env,
+            ORCHPORT_STATE_DIR: stateDir,
+            NO_COLOR: "1",
+          },
+          stderr: "pipe",
+          stdout: "pipe",
+        });
+        expect(runChild.exitCode).not.toBe(0);
+        expect(runChild.stderr.toString()).toContain(
+          "dev TLS certificate does not cover"
+        );
+
+        const down = Bun.spawnSync({
+          cmd: ["bun", cli, "proxy", "down"],
+          cwd: projectDir,
+          env: {
+            ...process.env,
+            ORCHPORT_STATE_DIR: stateDir,
+            NO_COLOR: "1",
+          },
+          stderr: "pipe",
+          stdout: "pipe",
+        });
+        expect(down.exitCode).toBe(0);
+        await Promise.race([
+          proxyProc.exited,
+          new Promise<number>((_, reject) =>
+            setTimeout(() => reject(new Error("proxy exit timeout")), 10_000)
+          ),
+        ]);
+      } finally {
+        proxyProc.kill("SIGKILL");
+      }
     },
     { timeout: 60_000 }
   );

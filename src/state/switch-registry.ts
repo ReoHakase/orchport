@@ -11,6 +11,7 @@ import type { ProxyConfig } from "../config/schema.ts";
 import { normalizeSwitchPattern } from "../proxy/path-match.ts";
 import { ErrorCode, OrchportError } from "../utils/errors.ts";
 import { isRecord } from "../utils/pick.ts";
+import { withStateLock } from "./lock.ts";
 import { listRunStates } from "./store.ts";
 import type { SwitchRegistryFile } from "./types.ts";
 import { getStateDir } from "./xdg.ts";
@@ -34,7 +35,20 @@ const isSwitchRegistryFile = (raw: unknown): raw is SwitchRegistryFile =>
   isRecord(raw) && raw.version === 1 && isRecord(raw.entries);
 
 export const parseSwitchRegistry = (text: string): SwitchRegistryFile => {
-  const raw: unknown = JSON.parse(text);
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new OrchportError(
+      ErrorCode.STATE_PARSE,
+      "Invalid switches.json JSON",
+      {
+        hint: "Delete or repair switches.json under your orchport state directory, or run `orchport doctor`.",
+        context: { path: switchesPath(), error: message },
+      }
+    );
+  }
   if (!isSwitchRegistryFile(raw)) {
     throw new OrchportError(
       ErrorCode.STATE_PARSE,
@@ -52,8 +66,15 @@ export const readSwitchRegistry = async (): Promise<SwitchRegistryFile> => {
   try {
     const text = await readFile(switchesPath(), "utf8");
     return parseSwitchRegistry(text);
-  } catch {
-    return emptyRegistry();
+  } catch (err) {
+    const code =
+      typeof err === "object" && err !== null && "code" in err
+        ? Reflect.get(err, "code")
+        : undefined;
+    if (code === "ENOENT") {
+      return emptyRegistry();
+    }
+    throw err;
   }
 };
 
@@ -99,36 +120,38 @@ export const claimSwitchSlotsForRun = async (options: {
     return;
   }
 
-  const reg = await readSwitchRegistry();
-  for (const { key } of updates) {
-    const cur = reg.entries[key];
-    if (cur !== undefined && cur.targetWorktree !== worktree && !force) {
-      throw new OrchportError(
-        ErrorCode.SWITCH_CONFLICT,
-        `Switch slot "${key}" is owned by worktree "${cur.targetWorktree}"; use --force-switch to take over, or run \`orchport switch ${worktree}\` first.`,
-        {
-          hint: "Pass global `--force-switch` on `orchport run`, or run `orchport switch <worktree>` to retarget slots.",
-          context: { key, owner: cur.targetWorktree, worktree },
-        }
-      );
+  await withStateLock("switches", async () => {
+    const reg = await readSwitchRegistry();
+    for (const { key } of updates) {
+      const cur = reg.entries[key];
+      if (cur !== undefined && cur.targetWorktree !== worktree && !force) {
+        throw new OrchportError(
+          ErrorCode.SWITCH_CONFLICT,
+          `Switch slot "${key}" is owned by worktree "${cur.targetWorktree}"; use --force-switch to take over, or run \`orchport switch ${worktree}\` first.`,
+          {
+            hint: "Pass global `--force-switch` on `orchport run`, or run `orchport switch <worktree>` to retarget slots.",
+            context: { key, owner: cur.targetWorktree, worktree },
+          }
+        );
+      }
+      if (cur !== undefined && cur.targetWorktree !== worktree && force) {
+        log.warning(
+          "Taking switch slot {key} from worktree {from} (--force-switch)",
+          { key, from: cur.targetWorktree }
+        );
+      }
     }
-    if (cur !== undefined && cur.targetWorktree !== worktree && force) {
-      log.warning(
-        "Taking switch slot {key} from worktree {from} (--force-switch)",
-        { key, from: cur.targetWorktree }
-      );
-    }
-  }
 
-  const now = new Date().toISOString();
-  for (const { key } of updates) {
-    reg.entries[key] = {
-      targetWorktree: worktree,
-      updatedAt: now,
-      lastRunId: runId,
-    };
-  }
-  await writeSwitchRegistry(reg);
+    const now = new Date().toISOString();
+    for (const { key } of updates) {
+      reg.entries[key] = {
+        targetWorktree: worktree,
+        updatedAt: now,
+        lastRunId: runId,
+      };
+    }
+    await writeSwitchRegistry(reg);
+  });
 };
 
 /**
@@ -141,28 +164,31 @@ export const setSwitchTargetsFromConfig = async (options: {
   proxies: Record<string, ProxyConfig>;
 }): Promise<string[]> => {
   const { sld, tld, targetWorktree, proxies } = options;
-  const reg = await readSwitchRegistry();
-  const touched: string[] = [];
-  const now = new Date().toISOString();
-  for (const [proxyName, pc] of Object.entries(proxies)) {
-    const patterns = pc.switchables;
-    if (patterns === undefined || patterns.length === 0) {
-      continue;
+  const result = await withStateLock("switches", async () => {
+    const reg = await readSwitchRegistry();
+    const touched: string[] = [];
+    const now = new Date().toISOString();
+    for (const [proxyName, pc] of Object.entries(proxies)) {
+      const patterns = pc.switchables;
+      if (patterns === undefined || patterns.length === 0) {
+        continue;
+      }
+      for (const raw of patterns) {
+        const pattern = normalizeSwitchPattern(raw);
+        const key = buildSwitchRegistryKey(sld, tld, proxyName, pattern);
+        reg.entries[key] = {
+          targetWorktree: targetWorktree,
+          updatedAt: now,
+        };
+        touched.push(key);
+      }
     }
-    for (const raw of patterns) {
-      const pattern = normalizeSwitchPattern(raw);
-      const key = buildSwitchRegistryKey(sld, tld, proxyName, pattern);
-      reg.entries[key] = {
-        targetWorktree: targetWorktree,
-        updatedAt: now,
-      };
-      touched.push(key);
+    if (touched.length > 0) {
+      await writeSwitchRegistry(reg);
     }
-  }
-  if (touched.length > 0) {
-    await writeSwitchRegistry(reg);
-  }
-  return touched;
+    return touched;
+  });
+  return result.value;
 };
 
 /** Latest run state port for `proxyName` in `targetWorktree`, or null. */

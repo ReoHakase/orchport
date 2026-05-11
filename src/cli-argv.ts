@@ -63,6 +63,22 @@ const firstSubcommandIndex = (head: string[]): number => {
   return -1;
 };
 
+/** Tokens before the first orchport subcommand and before the first `--` separator. */
+export const globalOptionPrefix = (argv: string[]): string[] => {
+  const dash = argv.indexOf(OPTION_TERMINATOR);
+  const head = dash === -1 ? argv : argv.slice(0, dash);
+  const subIdx = firstSubcommandIndex(head);
+  return subIdx === -1 ? head : head.slice(0, subIdx);
+};
+
+export const hasGlobalFlag = (
+  argv: string[],
+  flags: readonly string[]
+): boolean => {
+  const flagSet = new Set(flags);
+  return globalOptionPrefix(argv).some((a) => flagSet.has(a));
+};
+
 /**
  * Gunshi resolves subcommands from positional tokens only; `--config ./file` before the
  * real subcommand leaves `./file` as a false command name. Merge `--opt value` into

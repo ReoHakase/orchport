@@ -26,6 +26,8 @@ export type PortsRegistryFile = {
       workspace: string;
       worktree: string;
       entry: string;
+      pid: number;
+      runId: string;
       updatedAt: string;
     }
   >;
@@ -53,8 +55,12 @@ export type ProxyDaemonStateFile = {
   /** Privileged extra HTTPS listener (e.g. 443), or null if bind failed / skipped. */
   httpsPort: number | null;
   tls: boolean;
+  /** TLS material source. Missing in older state files. */
+  tlsKind?: "dev" | "file" | "none";
   /** PEM path for dev TLS or file TLS cert (optional). */
   certPath: string | null;
+  /** Hostnames covered by generated dev TLS. Empty/missing for file TLS or older state. */
+  tlsHosts?: string[];
   startedAt: string;
 };
 

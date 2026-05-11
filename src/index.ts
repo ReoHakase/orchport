@@ -1,5 +1,6 @@
 import { getLogger } from "@logtape/logtape";
 
+import { hasGlobalFlag } from "./cli-argv.ts";
 import { peekGlobalJsonErrorsFlag } from "./cli-json.ts";
 import { runCli } from "./cli.ts";
 import { formatOrchportCliError } from "./cli/format.ts";
@@ -10,17 +11,17 @@ import { orchportErrorToJson, OrchportError } from "./utils/errors.ts";
 const peekLogFlags = (
   argv: string[]
 ): { verbose: boolean; quiet: boolean; noColor: boolean } => ({
-  verbose: argv.some((a) => a === "--verbose" || a === "-v"),
-  quiet: argv.some((a) => a === "--quiet" || a === "-q"),
+  verbose: hasGlobalFlag(argv, ["--verbose", "-v"]),
+  quiet: hasGlobalFlag(argv, ["--quiet", "-q"]),
   noColor:
-    argv.some((a) => a === "--no-color") || process.env.NO_COLOR !== undefined,
+    hasGlobalFlag(argv, ["--no-color"]) || process.env.NO_COLOR !== undefined,
 });
 
 const log = getLogger(["orchport", "cli"]);
 
 const main = async (): Promise<void> => {
   const argv = process.argv.slice(2);
-  if (argv.some((a) => a === "--version")) {
+  if (hasGlobalFlag(argv, ["--version"])) {
     process.stdout.write(`${packageVersion()}\n`);
     return;
   }

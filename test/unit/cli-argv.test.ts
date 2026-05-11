@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
-import { normalizeGlobalOptionArgv } from "../../src/cli-argv.ts";
+import {
+  hasGlobalFlag,
+  normalizeGlobalOptionArgv,
+} from "../../src/cli-argv.ts";
 
 describe("normalizeGlobalOptionArgv", () => {
   test("merges --config and path before subcommand", () => {
@@ -89,5 +92,18 @@ describe("normalizeGlobalOptionArgv", () => {
       "--verbose",
       "env",
     ]);
+  });
+
+  test("global flag detection stops before subcommand child args", () => {
+    expect(
+      hasGlobalFlag(["run", "--", "tool", "--version"], ["--version"])
+    ).toBe(false);
+    expect(hasGlobalFlag(["--version", "run"], ["--version"])).toBe(true);
+    expect(
+      hasGlobalFlag(["run", "--", "tool", "--verbose"], ["--verbose"])
+    ).toBe(false);
+    expect(hasGlobalFlag(["--quiet", "run", "--", "tool"], ["--quiet"])).toBe(
+      true
+    );
   });
 });

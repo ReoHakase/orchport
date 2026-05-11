@@ -10,7 +10,8 @@ import type { LoadedConfig, ResolvedProxyShape } from "../config/schema.ts";
 import { normalizeConfigTld } from "../config/tld.ts";
 import { interpolateEnvValues } from "../env/interpolate.ts";
 import type { InterpolateCtx } from "../env/interpolate.ts";
-import { pickPortInRange } from "../ports/allocate.ts";
+import { isLocalPortFree, pickPortInRange } from "../ports/allocate.ts";
+import { type PortReservation, withPortReservations } from "../state/ports.ts";
 import { isReservedOrchportEnvKey } from "../utils/env-keys.ts";
 import { ErrorCode, OrchportError } from "../utils/errors.ts";
 import {
@@ -51,11 +52,44 @@ export type ResolvedSession = {
   mode: "local-port" | "local-proxy";
   proxies: Record<string, ResolvedProxyShape>;
   proxyPort?: number;
+  portReservation: "active" | "disabled";
   env: Record<string, string>;
   configPath: string | null;
 };
 
 const defaultLocalUrl = (port: number): string => `http://localhost:${port}`;
+
+const pickProxyPort = async (options: {
+  config: LoadedConfig;
+  sld: string;
+  worktree: string;
+  pMin: number;
+  pMax: number;
+  used: ReadonlySet<number>;
+}): Promise<number> => {
+  const configured = options.config.proxy?.port;
+  if (typeof configured === "number") {
+    if (options.used.has(configured) || !(await isLocalPortFree(configured))) {
+      throw new OrchportError(
+        ErrorCode.PORT_IN_USE,
+        `Configured proxy port ${configured} is not available`,
+        {
+          hint: 'Free the port, set `proxy.port: "auto"`, or choose another proxy port.',
+          context: { port: String(configured), entry: "__orchport_proxy__" },
+        }
+      );
+    }
+    return configured;
+  }
+  return pickPortInRange({
+    sld: options.sld,
+    worktree: options.worktree,
+    entryName: "__orchport_proxy__",
+    min: options.pMin,
+    max: options.pMax,
+    avoid: options.used,
+  });
+};
 
 const interpolateCtxBase = (
   rebuilt: Record<string, ResolvedProxyShape>,
@@ -93,6 +127,7 @@ type StandardEnvParams = {
   configPath: string | null;
   rebuilt: Record<string, ResolvedProxyShape>;
   proxyPort: number | undefined;
+  portReservation: "active" | "disabled";
   config: LoadedConfig;
 };
 
@@ -110,6 +145,7 @@ const buildStandardEnvBlock = (
     ORCHPORT_WORKTREE: p.worktree,
     ORCHPORT_MODE: p.mode,
     ORCHPORT_CONFIG: p.configPath ?? "",
+    ORCHPORT_PORT_RESERVATION: p.portReservation,
   };
 
   if (p.proxyPort !== undefined) {
@@ -263,6 +299,7 @@ export const buildEnvByProxy = (
     configPath: session.configPath,
     rebuilt: session.proxies,
     proxyPort: session.proxyPort,
+    portReservation: session.portReservation,
     config,
   });
 
@@ -353,73 +390,94 @@ export const resolveSession = async (
     withProxy: String(withProxy),
   });
 
-  const used = new Set<number>();
-  let proxyPort: number | undefined;
-
-  if (mode === "local-proxy" || withProxy) {
-    proxyPort = await pickPortInRange({
-      sld,
-      worktree,
-      entryName: "__orchport_proxy__",
-      min: pMin,
-      max: pMax,
-      avoid: used,
-    });
-    used.add(proxyPort);
-    log.debug("Allocated proxy port {port}", { port: String(proxyPort) });
-    log.debug("Proxy TLS config: {tls}", {
-      tls:
-        config.proxy?.tls === "dev"
-          ? "dev"
-          : config.proxy?.tls
-            ? "file"
-            : "none",
-    });
-  }
-
-  const proxies: Record<string, ResolvedProxyShape> = {};
   const proxyNames = Object.keys(config.proxies).toSorted();
+  const allocation = await withPortReservations(async (reservedPorts) => {
+    const used = new Set(reservedPorts);
+    const reservations: PortReservation[] = [];
+    let proxyPort: number | undefined;
 
-  for (const name of proxyNames) {
-    const ec = config.proxies[name];
-    /* eslint-disable-next-line no-await-in-loop */
-    const port = await pickEntryPort({
-      name,
-      ec,
-      pMin,
-      pMax,
-      used,
-      sld,
-      worktree,
-    });
-    used.add(port);
+    if (mode === "local-proxy" || withProxy) {
+      proxyPort = await pickProxyPort({
+        config,
+        sld,
+        worktree,
+        pMin,
+        pMax,
+        used,
+      });
+      used.add(proxyPort);
+      reservations.push({
+        port: proxyPort,
+        workspace: sld,
+        worktree,
+        entry: "__orchport_proxy__",
+        runId,
+      });
+      log.debug("Allocated proxy port {port}", { port: String(proxyPort) });
+      log.debug("Proxy TLS config: {tls}", {
+        tls:
+          config.proxy?.tls === "dev"
+            ? "dev"
+            : config.proxy?.tls
+              ? "file"
+              : "none",
+      });
+    }
 
-    const host = "localhost";
-    const localUrl = defaultLocalUrl(port);
-    proxies[name] = {
-      name,
-      port,
-      host,
-      url: `http://localhost:${port}`,
-      localUrl,
-    };
-  }
+    const proxies: Record<string, ResolvedProxyShape> = {};
+    for (const name of proxyNames) {
+      const ec = config.proxies[name];
+      /* eslint-disable-next-line no-await-in-loop */
+      const port = await pickEntryPort({
+        name,
+        ec,
+        pMin,
+        pMax,
+        used,
+        sld,
+        worktree,
+      });
+      used.add(port);
+      reservations.push({
+        port,
+        workspace: sld,
+        worktree,
+        entry: name,
+        runId,
+      });
 
-  const rebuilt: Record<string, ResolvedProxyShape> = {};
-  for (const name of proxyNames) {
-    const cur = proxies[name];
-    const url = buildEntryUrl({
-      config,
-      proxy: cur,
-      sld,
-      tld,
-      worktree,
-      worktreeHostPrefix,
-      proxyPort,
-    });
-    rebuilt[name] = { ...cur, url };
-    log.trace("Proxy {name} public url={url}", { name, url });
-  }
+      const host = "localhost";
+      const localUrl = defaultLocalUrl(port);
+      proxies[name] = {
+        name,
+        port,
+        host,
+        url: `http://localhost:${port}`,
+        localUrl,
+      };
+    }
+
+    const rebuilt: Record<string, ResolvedProxyShape> = {};
+    for (const name of proxyNames) {
+      const cur = proxies[name];
+      const url = buildEntryUrl({
+        config,
+        proxy: cur,
+        sld,
+        tld,
+        worktree,
+        worktreeHostPrefix,
+        mode,
+        proxyPort,
+      });
+      rebuilt[name] = { ...cur, url };
+      log.trace("Proxy {name} public url={url}", { name, url });
+    }
+
+    return { value: { proxyPort, rebuilt }, reservations };
+  });
+  const { proxyPort, rebuilt } = allocation.value;
+  const portReservation = allocation.active ? "active" : "disabled";
 
   const rt = options.runTarget?.trim();
   if (rt !== undefined && rt !== "") {
@@ -444,6 +502,7 @@ export const resolveSession = async (
     configPath: config.configPath ?? null,
     rebuilt,
     proxyPort,
+    portReservation,
     config,
   });
 
@@ -502,6 +561,7 @@ export const resolveSession = async (
     mode,
     proxies: rebuilt,
     proxyPort,
+    portReservation,
     env,
     configPath: config.configPath,
   };

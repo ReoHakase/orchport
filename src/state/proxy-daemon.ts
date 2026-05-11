@@ -24,7 +24,14 @@ const isDaemonState = (raw: unknown): raw is ProxyDaemonStateFile => {
     typeof o.mainPort === "number" &&
     (o.httpsPort === null || typeof o.httpsPort === "number") &&
     typeof o.tls === "boolean" &&
+    (o.tlsKind === undefined ||
+      o.tlsKind === "dev" ||
+      o.tlsKind === "file" ||
+      o.tlsKind === "none") &&
     (o.certPath === null || typeof o.certPath === "string") &&
+    (o.tlsHosts === undefined ||
+      (Array.isArray(o.tlsHosts) &&
+        o.tlsHosts.every((h) => typeof h === "string"))) &&
     typeof o.startedAt === "string"
   );
 };

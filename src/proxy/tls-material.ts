@@ -56,14 +56,7 @@ export const resolveProxyTlsMaterial = (options: {
 }): ResolvedProxyTlsMaterial => {
   const tlsCfg = options.config.proxy?.tls;
   if (tlsCfg === "dev") {
-    const hostnames = Object.keys(options.config.proxies).map((name) =>
-      buildLocalProxyHost(
-        name,
-        options.worktreeHostPrefix,
-        options.sld,
-        options.tld
-      )
-    );
+    const hostnames = proxyTlsHostnames(options);
     const gen = generateDevSelfSignedTlsSync(hostnames);
     return {
       fileTls: { cert: gen.certPath, key: gen.keyPath },
@@ -76,6 +69,21 @@ export const resolveProxyTlsMaterial = (options: {
   }
   return { fileTls: undefined, devTlsCleanup: null };
 };
+
+export const proxyTlsHostnames = (options: {
+  config: LoadedConfig;
+  sld: string;
+  tld: string;
+  worktreeHostPrefix: string;
+}): string[] =>
+  Object.keys(options.config.proxies).map((name) =>
+    buildLocalProxyHost(
+      name,
+      options.worktreeHostPrefix,
+      options.sld,
+      options.tld
+    )
+  );
 
 export const selectExtraProxyPort = (options: {
   httpsPort: false | number | undefined;

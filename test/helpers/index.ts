@@ -2,12 +2,21 @@
  * Shared helpers for CLI integration tests.
  */
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, resolve as resolvePath } from "node:path";
 
 const repoRoot = join(import.meta.dir, "..", "..");
 
 export const orchportCliEntry = (): string => join(repoRoot, "src", "index.ts");
+
+export const orchportCliCommand = (): string[] => {
+  const bin = process.env.ORCHPORT_E2E_BIN?.trim();
+  if (bin !== undefined && bin !== "") {
+    return [isAbsolute(bin) ? bin : resolvePath(repoRoot, bin)];
+  }
+  return ["bun", orchportCliEntry()];
+};
 
 /** Fresh empty state directory under the OS temp dir. */
 export const createTempStateDir = async (): Promise<string> => {
@@ -38,10 +47,34 @@ export const runOrchport = (
 ): ReturnType<typeof Bun.spawnSync> => {
   const env = { ...process.env, ...options.env, NO_COLOR: "1" };
   return Bun.spawnSync({
-    cmd: ["bun", orchportCliEntry(), ...args],
+    cmd: [...orchportCliCommand(), ...args],
     cwd: options.cwd,
     env,
     stderr: "pipe",
     stdout: "pipe",
   });
 };
+
+export const holdTcpPort = async (
+  port: number,
+  host = "127.0.0.1"
+): Promise<Server> =>
+  await new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once("error", reject);
+    server.listen(port, host, () => {
+      server.off("error", reject);
+      resolve(server);
+    });
+  });
+
+export const closeServer = async (server: Server): Promise<void> =>
+  await new Promise((resolve, reject) => {
+    server.close((err) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      resolve();
+    });
+  });

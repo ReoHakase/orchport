@@ -51,6 +51,7 @@ export type ProxyRouteResolver = {
   getSwitchRoutingForHost: (
     hostLower: string
   ) => SwitchRoutingContext | undefined;
+  refresh?: () => Promise<void>;
 };
 
 const staticRouteResolver = (
@@ -67,10 +68,15 @@ export const createProxyFetch = (options: {
 }): ((req: Request) => Promise<Response>) => {
   const targetFetch = options.targetFetch ?? fetch;
   return async (req: Request): Promise<Response> => {
-    const routes = options.resolver.getRoutes();
+    let routes = options.resolver.getRoutes();
     const rawHost = req.headers.get("host") ?? "";
     const host = rawHost.split(":")[0]?.toLowerCase() ?? "";
-    const defaultPort = routes.get(host);
+    let defaultPort = routes.get(host);
+    if (defaultPort === undefined && options.resolver.refresh !== undefined) {
+      await options.resolver.refresh();
+      routes = options.resolver.getRoutes();
+      defaultPort = routes.get(host);
+    }
     if (defaultPort === undefined) {
       log.warning("No route for host {host}", { host });
       return new Response(`orchport: unknown host ${host}`, { status: 404 });

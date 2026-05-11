@@ -1,3 +1,6 @@
+import { spawnSync } from "node:child_process";
+import { readdirSync, readFileSync, readlinkSync } from "node:fs";
+
 import { getLogger } from "@logtape/logtape";
 import { define } from "gunshi";
 
@@ -14,6 +17,128 @@ const isSignal = (s: string): s is NodeJS.Signals =>
 const sendSignal = (pid: number, sig: NodeJS.Signals): void => {
   process.kill(pid, sig);
 };
+
+const parsePositiveInt = (value: string, label: string): number => {
+  if (!/^\d+$/.test(value)) {
+    throw new OrchportError(
+      ErrorCode.KILL_USAGE,
+      `Invalid ${label}: ${value}`,
+      {
+        hint: `${label} must be a positive integer.`,
+        context: { [label]: value },
+      }
+    );
+  }
+  const n = Number(value);
+  if (!Number.isSafeInteger(n) || n <= 0) {
+    throw new OrchportError(
+      ErrorCode.KILL_USAGE,
+      `Invalid ${label}: ${value}`,
+      {
+        hint: `${label} must be a positive integer.`,
+        context: { [label]: value },
+      }
+    );
+  }
+  return n;
+};
+
+const parseTargetPort = (target: string): number | null => {
+  if (/^\d+$/.test(target)) {
+    return parsePositiveInt(target, "port");
+  }
+  try {
+    const u = new URL(target);
+    if (u.protocol !== "http:" && u.protocol !== "https:") {
+      return null;
+    }
+    if (u.port !== "") {
+      return parsePositiveInt(u.port, "port");
+    }
+    return u.protocol === "https:" ? 443 : 80;
+  } catch {
+    return null;
+  }
+};
+
+const findPidByLsof = (port: number): number | null => {
+  const r = spawnSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (r.status !== 0 || !r.stdout) {
+    return null;
+  }
+  const pid = r.stdout
+    .split(/\s+/)
+    .map((s) => Number(s))
+    .find((n) => Number.isSafeInteger(n) && n > 0);
+  return pid ?? null;
+};
+
+const listeningInodesForPort = (port: number): Set<string> => {
+  const hexPort = port.toString(16).toUpperCase().padStart(4, "0");
+  const out = new Set<string>();
+  for (const file of ["/proc/net/tcp", "/proc/net/tcp6"]) {
+    let text = "";
+    try {
+      text = readFileSync(file, "utf8");
+    } catch {
+      continue;
+    }
+    for (const line of text.split("\n").slice(1)) {
+      const cols = line.trim().split(/\s+/);
+      const local = cols[1];
+      const state = cols[3];
+      const inode = cols[9];
+      if (
+        local?.endsWith(`:${hexPort}`) === true &&
+        state === "0A" &&
+        inode !== undefined
+      ) {
+        out.add(inode);
+      }
+    }
+  }
+  return out;
+};
+
+const findPidByProc = (port: number): number | null => {
+  const inodes = listeningInodesForPort(port);
+  if (inodes.size === 0) {
+    return null;
+  }
+  let pids: string[] = [];
+  try {
+    pids = readdirSync("/proc").filter((name) => /^\d+$/.test(name));
+  } catch {
+    return null;
+  }
+  for (const pid of pids) {
+    let fds: string[] = [];
+    try {
+      fds = readdirSync(`/proc/${pid}/fd`);
+    } catch {
+      continue;
+    }
+    for (const fd of fds) {
+      try {
+        const target = readlinkSync(`/proc/${pid}/fd/${fd}`);
+        const match = /^socket:\[(\d+)\]$/.exec(target);
+        if (match?.[1] !== undefined && inodes.has(match[1])) {
+          return Number(pid);
+        }
+      } catch {
+        /* process may exit while scanning */
+      }
+    }
+  }
+  return null;
+};
+
+const findListeningPid = (port: number): number | null =>
+  findPidByLsof(port) ??
+  (process.platform === "linux" ? findPidByProc(port) : null);
 
 /**
  * Signals root PIDs from recorded runs (by entry name, port, run id, `--all`, etc.). `--stale` drops dead run JSON files only.
@@ -57,7 +182,17 @@ export const killCommand = define({
   run: async (ctx) => {
     const values = ctx.values;
     const sigRaw = pickString(values, "signal") ?? "SIGTERM";
-    const sig: NodeJS.Signals = isSignal(sigRaw) ? sigRaw : "SIGTERM";
+    if (!isSignal(sigRaw)) {
+      throw new OrchportError(
+        ErrorCode.KILL_USAGE,
+        `Unsupported signal ${sigRaw}`,
+        {
+          hint: "Use one of SIGTERM, SIGKILL, SIGINT, or SIGHUP.",
+          context: { signal: sigRaw },
+        }
+      );
+    }
+    const sig: NodeJS.Signals = sigRaw;
     const rows = await listRunStates();
     log.debug("kill: loaded {n} run state(s)", { n: String(rows.length) });
 
@@ -73,8 +208,9 @@ export const killCommand = define({
 
     const pidStr = pickString(values, "pid");
     if (pidStr !== undefined && pidStr !== "") {
+      const pid = parsePositiveInt(pidStr, "pid");
       log.info("kill: signal {sig} pid {pid}", { sig, pid: pidStr });
-      sendSignal(Number(pidStr), sig);
+      sendSignal(pid, sig);
       return;
     }
 
@@ -132,30 +268,43 @@ export const killCommand = define({
       );
     }
 
+    const force = pickBoolean(values, "force") === true;
     for (const t of targets) {
-      if (/^\d+$/.test(t)) {
-        const port = Number(t);
+      const portTarget = parseTargetPort(t);
+      if (portTarget !== null) {
+        const port = portTarget;
         const match = rows.find((r) =>
           Object.values(r.proxies).some((e) => e.port === port)
         );
         if (!match) {
-          if (pickBoolean(values, "force") !== true) {
+          if (!force) {
             throw new OrchportError(
               ErrorCode.KILL_NOT_FOUND,
               `No orchport run owns port ${port}`,
               {
-                hint: "Only ports allocated by a recorded orchport run can be targeted; foreign processes are not killed yet.",
+                hint: "Only ports allocated by a recorded orchport run can be targeted by default; pass --force to signal a foreign process listening on this port.",
                 context: { port: String(port) },
               }
             );
           }
-          throw new OrchportError(
-            ErrorCode.KILL_UNSUPPORTED,
-            "--force for non-orchport ports is not implemented yet",
-            {
-              hint: "Stop the process listening on that port manually (e.g. activity Monitor / lsof / kill).",
-            }
-          );
+          const foreignPid = findListeningPid(port);
+          if (foreignPid === null) {
+            throw new OrchportError(
+              ErrorCode.KILL_NOT_FOUND,
+              `No listening process found on port ${port}`,
+              {
+                hint: "Check the port number or stop the process manually.",
+                context: { port: String(port) },
+              }
+            );
+          }
+          log.warning("kill: force port {port} -> pid {pid} {sig}", {
+            port: String(port),
+            pid: String(foreignPid),
+            sig,
+          });
+          sendSignal(foreignPid, sig);
+          continue;
         }
         if (pidAlive(match.rootPid)) {
           log.info("kill: port {port} -> rootPid {pid} {sig}", {

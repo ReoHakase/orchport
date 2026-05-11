@@ -22,6 +22,19 @@ const shellQuote = (s: string): string => {
   return `'${s.replaceAll("'", `'\\''`)}'`;
 };
 
+const envKeyRe = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+const dotenvQuote = (s: string): string => {
+  if (s !== "" && !/[\s#"'\\\n\r]/.test(s)) {
+    return s;
+  }
+  return `"${s
+    .replaceAll("\\", "\\\\")
+    .replaceAll("\n", "\\n")
+    .replaceAll("\r", "\\r")
+    .replaceAll('"', '\\"')}"`;
+};
+
 type EnvLineFormat = "dotenv" | "plain" | "shell";
 
 const writeEnvLines = (
@@ -29,24 +42,23 @@ const writeEnvLines = (
   format: EnvLineFormat
 ): void => {
   for (const [key, val] of Object.entries(env)) {
+    if (format !== "plain" && !envKeyRe.test(key)) {
+      throw new OrchportError(
+        ErrorCode.CLI_USAGE,
+        `Cannot print ${format} output for invalid environment key "${key}"`,
+        {
+          hint: "Use `--json` or rename the key to a shell-compatible identifier.",
+          context: { key },
+        }
+      );
+    }
     if (format === "shell") {
       process.stdout.write(`export ${key}=${shellQuote(val)}\n`);
+    } else if (format === "dotenv") {
+      process.stdout.write(`${key}=${dotenvQuote(val)}\n`);
     } else {
       process.stdout.write(`${key}=${val}\n`);
     }
-  }
-};
-
-const writeSectionedEnv = (
-  sections: readonly EnvSection[],
-  format: EnvLineFormat
-): void => {
-  for (const [index, section] of sections.entries()) {
-    if (index > 0) {
-      process.stdout.write("\n");
-    }
-    process.stdout.write(`[${section.name}]\n`);
-    writeEnvLines(section.env, format);
   }
 };
 
@@ -72,7 +84,7 @@ const nestedEnvJson = (
 
 /**
  * Print resolved env. With `env <proxy>`, output the exact env injected by `run <proxy>`.
- * Without a proxy target, output all generated env grouped as global + proxy sections.
+ * Without a proxy target, script/piped output is a flat generated env stream; TTY table output remains per-proxy.
  */
 export const envCommand = define({
   name: "env",
@@ -237,7 +249,7 @@ export const envCommand = define({
       return;
     }
     if (shellOut || dotenvOut || plainOut || process.stdout.isTTY !== true) {
-      writeSectionedEnv(sections, lineFormat);
+      writeEnvLines(session.env, lineFormat);
       return;
     }
     const tty = process.stdout.isTTY === true;
