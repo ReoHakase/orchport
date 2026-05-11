@@ -1,6 +1,6 @@
 {
   "name": "orchport",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Non-interactive env and port resolver for local multi-worktree web development",
   "homepage": "https://github.com/ReoHakase/orchport#readme",
   "bugs": {
