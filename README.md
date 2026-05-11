@@ -2,6 +2,12 @@
 
 # 🎻 Orchport 🔌
 
+<p>
+  <a href="https://www.npmjs.com/package/orchport"><img alt="npm" src="https://img.shields.io/npm/v/orchport?logo=npm&label=npm"></a>
+  <a href="https://github.com/ReoHakase/orchport#install"><img alt="Nix flake" src="https://img.shields.io/badge/Nix-flake-5277C3?logo=nixos&logoColor=white"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green.svg"></a>
+</p>
+
   <img src=".github/opengraph.png" alt="Orchport" width="100%" />
 
 **A non-interactive port, URL, and environment resolver for local multi-worktree web development.**
