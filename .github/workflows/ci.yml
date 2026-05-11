@@ -19,6 +19,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Setup mise
         uses: jdx/mise-action@v3
@@ -46,8 +48,21 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
+      - name: Changeset status
+        if: github.event_name == 'pull_request'
+        run: bun run scripts/release.ts changeset-status origin/${{ github.base_ref }}
+
       - name: Test
         run: bun run test
 
       - name: Build
         run: bun run build
+
+      - name: Build compiled binary
+        run: bun run build:compile
+
+      - name: Check compiled version
+        run: test "$(./dist/orchport --version)" = "$(bun -p 'require("./package.json").version')"
+
+      - name: Check npm package
+        run: npm_config_cache=/tmp/orchport-npm-cache npm pack --dry-run

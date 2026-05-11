@@ -4,6 +4,8 @@ import { fileURLToPath } from "node:url";
 
 import { isRecord } from "../utils/pick.ts";
 
+declare const ORCHPORT_VERSION: string | undefined;
+
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 const readVersion = (text: string): string => {
@@ -16,6 +18,12 @@ const readVersion = (text: string): string => {
 };
 
 export const packageVersion = (): string => {
+  if (
+    typeof ORCHPORT_VERSION === "string" &&
+    ORCHPORT_VERSION.trim().length > 0
+  ) {
+    return ORCHPORT_VERSION;
+  }
   try {
     const text = readFileSync(join(root, "package.json"), "utf8");
     return readVersion(text);

@@ -15,6 +15,28 @@
 >
 > orchport はプロンプトを出さず、`orchport run -- cmd` で決定的に終わることを前提にしています。
 
+## インストール
+
+npm:
+
+```bash
+npm install -g orchport
+```
+
+プロジェクトごとに固定する場合:
+
+```bash
+npm install -D orchport
+```
+
+Nix flakes:
+
+```bash
+nix profile install github:ReoHakase/orchport
+```
+
+リリース tarball を直接使う場合は、GitHub Releases の `orchport-vX.Y.Z-<target>.tar.gz` と `SHA256SUMS` を確認してください。npm / nix は同じ single-binary release artifact を使います。
+
 ## 主なコマンド
 
 | コマンド          | 役割                                                                                                                                                                                                 |
