@@ -82,13 +82,29 @@ jobs:
       - name: Run non-root restricted-port e2e
         run: |
           docker run --rm \
+            --privileged \
             --sysctl net.ipv4.ip_unprivileged_port_start=1024 \
-            --user "$(id -u):$(id -g)" \
+            -e ORCHPORT_CI_UID="$(id -u)" \
+            -e ORCHPORT_CI_GID="$(id -g)" \
+            -e DEBIAN_FRONTEND=noninteractive \
             -e HOME=/tmp \
             -v "$PWD:/workspace" \
             -w /workspace \
             oven/bun:1.3.13 \
-            sh -lc 'bun install --frozen-lockfile && ORCHPORT_PRIVILEGED_E2E=1 bun test test/e2e/privileged-container.test.ts'
+            sh -lc '
+              apt-get update
+              apt-get install -y --no-install-recommends openssl
+              if getent passwd "$ORCHPORT_CI_UID" >/dev/null; then
+                ci_user="$(getent passwd "$ORCHPORT_CI_UID" | cut -d: -f1)"
+              else
+                if ! getent group "$ORCHPORT_CI_GID" >/dev/null; then
+                  groupadd -g "$ORCHPORT_CI_GID" orchport-ci
+                fi
+                useradd -m -u "$ORCHPORT_CI_UID" -g "$ORCHPORT_CI_GID" orchport-ci
+                ci_user=orchport-ci
+              fi
+              runuser -u "$ci_user" -- env HOME=/tmp ORCHPORT_PRIVILEGED_E2E=1 sh -lc "bun install --frozen-lockfile && bun test test/e2e/privileged-container.test.ts"
+            '
 
   privileged-container-root:
     name: Privileged E2E (root container)
@@ -102,9 +118,10 @@ jobs:
       - name: Run root 443 e2e
         run: |
           docker run --rm \
-            --sysctl net.ipv4.ip_unprivileged_port_start=1024 \
+            --add-host web.priv-root.localhost:127.0.0.1 \
+            -e DEBIAN_FRONTEND=noninteractive \
             -e HOME=/tmp \
             -v "$PWD:/workspace" \
             -w /workspace \
             oven/bun:1.3.13 \
-            sh -lc 'bun install --frozen-lockfile && ORCHPORT_PRIVILEGED_E2E=1 bun test test/e2e/privileged-container.test.ts'
+            sh -lc 'apt-get update && apt-get install -y --no-install-recommends openssl && bun install --frozen-lockfile && ORCHPORT_PRIVILEGED_E2E=1 bun test test/e2e/privileged-container.test.ts'
