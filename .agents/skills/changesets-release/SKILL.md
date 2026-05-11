@@ -15,6 +15,7 @@ orchport の release / changelog / publish まわりを変更するときはこ�
 - `CHANGELOG.md` は手で直接編集しない。`.changeset/*.md` を書き、Version PR の `changeset version` に生成させる。
 - npm package は single-binary shim 方式。runtime dependency を増やさず、`postinstall` は GitHub Release の tarball と `SHA256SUMS` から binary を入れる。
 - Nix は GitHub Release tarball を使う。release 後に生成される `nix/release-hashes.json` を source of truth にする。
+- Release workflow が Version PR 作成時に `GitHub Actions is not permitted to create or approve pull requests` を出した場合は、repo setting の `Allow GitHub Actions to create and approve pull requests` を有効化するか、生成済み `changeset-release/main` から PR を手動作成する。publish path の失敗は隠さない。
 
 ## 変更時の手順
 
