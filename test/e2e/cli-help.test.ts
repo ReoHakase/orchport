@@ -1,9 +1,23 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { mkdir, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { runOrchport } from "../helpers/index.ts";
+
+const readPackageVersion = (): string => {
+  const raw: unknown = JSON.parse(readFileSync("package.json", "utf8"));
+  if (
+    typeof raw === "object" &&
+    raw !== null &&
+    "version" in raw &&
+    typeof raw.version === "string"
+  ) {
+    return raw.version;
+  }
+  throw new Error("package.json version must be a string");
+};
 
 describe("e2e help", () => {
   test("root help keeps -v for verbose and --version long-only", async () => {
@@ -68,12 +82,13 @@ describe("e2e help", () => {
   test("--version prints the package version without using -v", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "orchport-help-"));
     await mkdir(cwd, { recursive: true });
+    const packageVersion = readPackageVersion();
     const version = runOrchport(["--version"], { cwd });
     expect(version.exitCode).toBe(0);
-    expect(version.stdout.toString().trim()).toBe("0.1.0");
+    expect(version.stdout.toString().trim()).toBe(packageVersion);
     expect(version.stderr.toString()).toBe("");
 
     const verbose = runOrchport(["-v"], { cwd });
-    expect(verbose.stdout.toString().trim()).not.toBe("0.1.0");
+    expect(verbose.stdout.toString().trim()).not.toBe(packageVersion);
   });
 });

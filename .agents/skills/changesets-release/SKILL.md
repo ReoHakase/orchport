@@ -59,7 +59,7 @@ orchport の release / changelog / publish まわりを変更するときはこ�
 
 ### CI で行われること
 
-Release workflow は `main` への push で動く。
+`main` への push ではまず CI workflow の Quality job が動く。Release workflow はその CI run が `success` で完了した後に `workflow_run` で動き、CI が検証した commit SHA を checkout する。CI が失敗した commit では Version PR 作成も publish も実行しない。
 
 1. `.changeset/*.md` が残っている場合:
    - `changesets/action@v1` が `bun run version-packages` を実行する。
