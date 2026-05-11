@@ -57,6 +57,22 @@ The Nix flake also packages those prebuilt release binaries. It does not rebuild
 
 If you install manually, download the `orchport-vX.Y.Z-<target>.tar.gz` asset and verify it against the release checksums.
 
+## Agent Skill
+
+If you want an agent to understand how to add and maintain Orchport in another project, install the public Orchport skill:
+
+```bash
+apm install ReoHakase/orchport/skills/orchport
+```
+
+Or with the Agent Skills CLI:
+
+```bash
+npx skills add ReoHakase/orchport --skill orchport
+```
+
+This installs guidance for configuring `orchport.config.*`, wiring Turborepo or monorepo dev scripts, using `ORCHPORT_*` variables, local proxy/TLS behavior, and `switchables` for OAuth callback routing.
+
 ## Quick Start
 
 Generate a config:
