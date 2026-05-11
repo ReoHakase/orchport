@@ -4,174 +4,474 @@
 
   <img src=".github/opengraph.png" alt="Orchport" width="100%" />
 
-ローカルのサブエージェントや git worktree 向けの非対話型 CLI です。複数の dev サーバーのポート衝突を避け、`web.<worktree>.myapp.localhost` のようなホスト規則で URL を組み立て、結果を `ORCHPORT_*` として子プロセスへ渡します。
+**A non-interactive port, URL, and environment resolver for local multi-worktree web development.**
+
+Orchport gives each git worktree a predictable set of local service URLs, avoids dev-server port collisions, and injects the resolved values into the command you run.
 
 </div>
 
-## なぜ orchport か
+## Why Orchport?
+
+Modern web apps often start more than one local process: a web app, an API, a local database proxy, an email previewer, Storybook, and so on. That gets awkward when several agents, terminals, or git worktrees run the same monorepo at the same time.
+
+Orchport is built for that workflow:
+
+- It allocates ports deterministically inside configured ranges.
+- It creates readable URLs such as `https://api.fix-login.myapp.localhost`.
+- It exports `ORCHPORT_*` variables for scripts and child processes.
+- It can run a local reverse proxy so browser-facing URLs stay stable while backend ports move.
+- It never prompts. `orchport run -- <command>` is safe for CI, agents, and one-shot scripts.
 
 > [!NOTE]
-> [Vercel Labs / portless](https://github.com/vercel-labs/portless) のように、ローカル用の名前付き URL やプロキシを TTY 前提で起動するツールは、ヘッドレスなエージェントやワンショット実行では扱いづらいことがあります（例: [非対話環境でのプロンプト](https://github.com/vercel-labs/portless/issues/224)）。
->
-> orchport はプロンプトを出さず、`orchport run -- cmd` で決定的に終わることを前提にしています。
+> Tools such as [Vercel Labs / portless](https://github.com/vercel-labs/portless) are useful for interactive local proxying. Orchport focuses on non-interactive commands, reproducible env injection, and git-worktree-aware naming.
 
-## インストール
+## Install
 
-npm:
+Use npm for most projects:
 
 ```bash
 npm install -g orchport
 ```
 
-プロジェクトごとに固定する場合:
+Or pin it per project:
 
 ```bash
 npm install -D orchport
 ```
 
-Nix flakes:
+With Bun:
+
+```bash
+bun add -D orchport
+```
+
+With Nix flakes:
 
 ```bash
 nix profile install github:ReoHakase/orchport
 ```
 
-リリース tarball を直接使う場合は、GitHub Releases の `orchport-vX.Y.Z-<target>.tar.gz` と `SHA256SUMS` を確認してください。npm / nix は同じ single-binary release artifact を使います。
+Orchport is distributed as a precompiled Bun single-file executable created with `bun build --compile`. The npm package does not compile Orchport on the user's machine; it is a small shim that downloads the matching binary from GitHub Releases during `postinstall` and verifies it with `SHA256SUMS`.
 
-## 主なコマンド
+The Nix flake also packages those prebuilt release binaries. It does not rebuild the TypeScript source with Bun in the Nix sandbox.
 
-| コマンド          | 役割                                                                                                                                                                                                 |
-| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `orchport run`    | 設定を読み、ポートと URL を解決。`local-proxy` ならリバースプロキシを立ててから子コマンドを実行。`orchport run web -- cmd` のように先頭に **プロキシ名** を置くと、そのプロキシの `env` だけをマージ |
-| `orchport env`    | 解決結果のみ表示（TTY ではプロキシ別テーブル、JSON / plain / shell 向けなど）                                                                                                                        |
-| `orchport list`   | 記録された run の一覧                                                                                                                                                                                |
-| `orchport kill`   | 記録に基づきプロセスへシグナル                                                                                                                                                                       |
-| `orchport doctor` | 状態ディレクトリの作成・読み書き試行と設定読み込みの簡易チェック                                                                                                                                     |
-| `orchport init`   | 設定ファイルの雛形生成                                                                                                                                                                               |
-| `orchport switch` | `switchables` パスの向き先 worktree を更新（後述）                                                                                                                                                   |
+If you install manually, download the `orchport-vX.Y.Z-<target>.tar.gz` asset and verify it against the release checksums.
 
-パススイッチ: OAuth コールバックなど、ホストは共通のまま特定パスだけ別 worktree のバックエンドへ振り分けられます。
+## Quick Start
 
-## 状態ディレクトリとエージェントのサンドボックス
+Generate a config:
 
-run の記録やパススイッチの所有者など、共有状態は **`$XDG_STATE_HOME/orchport`** に保存します。`XDG_STATE_HOME` が未設定のときは XDG の既定どおり **`~/.local/state/orchport`** です。テストや特殊環境では **`ORCHPORT_STATE_DIR`** で上書きできます。解決されたパスと、状態ディレクトリへの **読み取り・書き込みが成功したこと** は **`orchport doctor`** の一行出力で確認できます。
+```bash
+orchport init --format ts
+```
 
-Cursor・Codex・Claude Code などのサンドボックスはワークスペース外への書き込みを許可していないことが多いので、orchport の状態ディレクトリへの読み書きが必要なときは、次のように **絶対パス**（例: macOS では `/Users/you/.local/state/orchport`）を追加してください。細部は各製品の最新ドキュメントを参照してください。
-
-| 環境            | 設定の置き場                                                                                                                           | 内容                                                                                                                                                                                                                                  |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Cursor**      | [`sandbox.json`](https://cursor.com/docs/reference/sandbox)（`~/.cursor/sandbox.json` またはリポジトリの `.cursor/sandbox.json`）      | `type` が `workspace_readwrite` のとき、**`additionalReadwritePaths`** に状態ディレクトリの絶対パスを追加する（ユーザー設定とリポジトリ設定はマージされる）。                                                                         |
-| **Codex**       | [`~/.codex/config.toml`](https://developers.openai.com/codex/config-reference)（信頼済みプロジェクトなら `.codex/config.toml`）        | `sandbox_mode = "workspace-write"` とし、**`sandbox_workspace_write.writable_roots`** に同じ絶対パスを追加する。CLI では **`--add-dir`** で追加できる場合がある。                                                                     |
-| **Claude Code** | [`settings.json`](https://code.claude.com/docs/en/configuration)（`~/.claude/settings.json` やプロジェクトの `.claude/settings.json`） | **`sandbox.filesystem.allowWrite`** に絶対パスを追加する（配列はスコープ間でマージされる）。組み込みファイルツールでそのパスを扱う場合は **`additionalDirectories`** も必要になることがある（状態はワークスペース外に置かれるため）。 |
-
-## 使い方（概要）
+Check that Orchport can read the config and state directory:
 
 ```bash
 orchport doctor
+```
+
+Inspect the resolved environment:
+
+```bash
+orchport env
 orchport env --json
+```
+
+Run your dev command with resolved ports and URLs:
+
+```bash
 orchport run -- turbo dev
 ```
 
-`run` で子に渡る例: `ORCHPORT_WEB_PORT` などプロキシ単位の変数、`ORCHPORT_SLD` / `ORCHPORT_TLD` / `ORCHPORT_WORKTREE` など。
+If the wrapped command accepts arguments that start with `-`, keep the `--` separator:
 
-設定ファイルはカレントから親へ向かって探索します。例: `orchport.config.ts`, `orchport.yaml`, `orchport.json`。
+```bash
+orchport run -- pnpm exec vite --host 0.0.0.0
+```
 
-### グローバルオプション（サブコマンドより前）
+## Turborepo Setup
 
-| オプション          | 意味                                                                                     |
-| ------------------- | ---------------------------------------------------------------------------------------- |
-| `--config <path>`   | 設定ファイルを明示                                                                       |
-| `--sld <name>`      | ホスト名のラベル（例: `*.myapp.localhost` の `myapp`）を上書き                           |
-| `--tld <suffix>`    | 公開サフィックスを上書き。`localhost` や `.test` など。先頭の `.` は有無どちらでも正規化 |
-| `--worktree <name>` | worktree 名を上書き                                                                      |
-| `--version`         | バージョンを表示                                                                         |
-| `--verbose`, `-v`   | `orchport.*` ロガーを trace まで出す                                                     |
-| `--quiet`, `-q`     | warning / error のみに抑える                                                             |
-| `--no-color`        | ANSI 色を無効化                                                                          |
-| `--force-switch`    | `orchport run` のみ。パススイッチのスロットが他 worktree のものでも奪って続行            |
-| `--json`            | 致命的エラーを stderr に JSON で出す                                                     |
+Orchport works well as a thin wrapper around `turbo dev`. The main choice is how each package receives its port.
 
-> [!TIP]
-> 子コマンドが `-` で始まる引数を取る場合は `orchport run -- cmd ...` のように `--` で区切ってください。
+### Pattern 1: One Turbo Process for Everything
 
-## ポート選択アルゴリズム
+Use this when your normal workflow is `turbo dev` from the repository root.
 
-| 項目                     | 内容                                                                                                                                                                                               |
-| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| レンジの元               | エントリの `range` が `"auto"`（省略含む）→ ルートの `portRange`。ルート省略時は `[43100, 43999]`                                                                                                  |
-| 明示レンジ               | `[min, max]` はその閉区間のみ。`min === max` は固定ポートとして扱う                                                                                                                                |
-| 戦略 `strategy`          | `smaller`: min から昇順 / `larger`: max から降順 / `deterministic`（既定）: `hashStable(sld + "\0" + worktree + "\0" + entryName)` で開始位置を決め、レンジ内を一周する順で試す（FNV-1a 風 32bit） |
-| 空き判定                 | 決めた順で、同一解決内ですでに使ったポートを除き、`127.0.0.1` で短時間 TCP リッスンできる最初の番号                                                                                                |
-| 固定ポートが埋まっている | `strict: true` → エラー。`strict: false`（既定）→ 警告のうえグローバル `portRange` へフォールバック                                                                                                |
-| 区間内に空きなし         | 同上。`strict: false` ならグローバル `portRange` へ、`true` ならエラー                                                                                                                             |
+Root `package.json`:
 
-## パススイッチ（`switchables`）
+```json
+{
+  "scripts": {
+    "dev": "turbo dev",
+    "dev:orchport": "orchport run -- turbo dev",
+    "env:orchport": "orchport env"
+  }
+}
+```
 
-> [!IMPORTANT]
-> [Better Auth](https://www.better-auth.com/) などで OAuth コールバックを扱う場合、リダイレクト先 URL はアプリ側で 1 本に決める必要があります。一方で Google や GitHub などの OAuth プロバイダーは、開発用クライアントに **登録できるコールバック URL が 1 つ** に限られることが多く、worktree ごとに別ホスト・別 URL を登録し直すのは現実的ではありません。
->
-> そのため「公開 URL とコールバックパスは常に同じにしつつ、プロキシだけ別 worktree の API に切り替える」パススイッチが必要になります。
+Each package's `dev` script should read its own generated `ORCHPORT_<PROXY>_PORT` variable.
 
-`local-proxy` でプロキシを立てているとき、プロキシに **`switchables`**（文字列の配列）を付けると、マッチしたパスだけ別 worktree の同じプロキシ名の dev サーバーへ転送できます。
+`apps/web/package.json`:
 
-| トピック                 | 説明                                                                                                                                                                      |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| パターン                 | 完全一致 `/path` または末尾 `/prefix/*` のみ。`**` や途中の `*` は不可                                                                                                    |
-| 状態                     | `ORCHPORT_STATE_DIR` または XDG 下の `switches.json` にスロット所有者を記録                                                                                               |
-| `orchport run`           | `switchables` があると現在の worktree がスロットを claim。他が持っていればエラー。`--force-switch` で上書き                                                               |
-| `orchport switch <slug>` | 設定内の全 `switchables` スロットの向き先を指定 worktree に更新。プロキシ再起動は不要。ポートはその worktree＋プロキシ名の最新 run 状態から。無ければ該当リクエストは 502 |
-| 振る舞い                 | 通常は Host でバックエンドを決め、パスが `switchables` のいずれかに一致すると別ポートへ上書き転送                                                                         |
+```json
+{
+  "scripts": {
+    "dev": "next dev --port ${ORCHPORT_WEB_PORT:-3000}"
+  }
+}
+```
 
-## 設定ファイル（ルート）
+`apps/api/package.json`:
 
-| キー        | 型のイメージ                  | 既定・補足                                                                                              |
-| ----------- | ----------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `sld`       | 文字列                        | 省略時: git トップのディレクトリ名 → なければカレント名からスラッグ。ホスト `*.<sld><tld>`              |
-| `tld`       | 文字列                        | 省略時: `.localhost`。読み込み時に先頭 `.` を正規化                                                     |
-| `worktree`  | 文字列                        | 省略時: git から検出                                                                                    |
-| `mode`      | `local-port` \| `local-proxy` | 既定: `local-port`。`local-proxy` で内蔵リバプロとプロキシ経由 URL                                      |
-| `portRange` | `[number, number]`            | 既定: `[43100, 43999]`。`range: "auto"` と strict フォールバックで使用                                  |
-| `proxy`     | オブジェクト                  | `local-proxy` で `tls` 省略 → 開発用自己署名 `dev`。`tls: false` で HTTP のみ。`httpsPort` で追加リスナ |
-| `proxies`   | 名前 → プロキシ設定           | 必須。`web` なら `ORCHPORT_WEB_*`                                                                       |
-| `env`       | マップまたは TS では関数      | `${web.url}` などの補間                                                                                 |
+```json
+{
+  "scripts": {
+    "dev": "PORT=${ORCHPORT_API_PORT:-3001} bun run src/index.ts"
+  }
+}
+```
 
-### プロキシの形
+`packages/email/package.json`:
 
-| 書き方             | 意味                                                                                                                                                                    |
-| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `true` または `{}` | `range: "auto"`, `strategy: "deterministic"`, `strict: false` と同等                                                                                                    |
-| オブジェクト       | `range`（`"auto"` または `[min, max]`）, `strategy`, `strict`, 任意で **`switchables`**（**文字列の配列**のみ）, 任意で **`env`**（そのプロキシ向けの補間付き環境変数） |
+```json
+{
+  "scripts": {
+    "dev": "react-email dev --port ${ORCHPORT_EMAIL_PORT:-3002}"
+  }
+}
+```
 
-> [!NOTE]
-> YAML / JSON ではレガシーキー `workspace` が `sld` と同義でマージされます。両方あり値が矛盾するとエラーです。
+For portability, prefer reading the environment in the app code when possible:
 
-### `orchport.config.ts` の例
+```ts
+const port = Number(process.env.ORCHPORT_API_PORT ?? process.env.PORT ?? 3001);
+```
 
-依存に `orchport` がある場合:
+Then run:
 
-```typescript
+```bash
+npm run dev:orchport
+```
+
+### Pattern 2: One Orchport Target per Service
+
+Use this when you start one package at a time, or when an agent is assigned to a single service.
+
+Root `package.json`:
+
+```json
+{
+  "scripts": {
+    "dev:web": "orchport run web -- turbo dev --filter=@acme/web",
+    "dev:api": "orchport run api -- turbo dev --filter=@acme/api",
+    "dev:email": "orchport run email -- turbo dev --filter=@acme/email"
+  }
+}
+```
+
+When you pass a proxy name after `run`, Orchport injects that proxy's environment as the flat command environment. In that mode, service code can read `PORT` directly:
+
+```ts
+const port = Number(process.env.PORT ?? 3001);
+```
+
+### Example `orchport.config.ts`
+
+```ts
 import { defineConfig } from "orchport";
 
 export default defineConfig({
-  sld: "myapp",
-  tld: "test",
+  sld: "acme",
+  tld: "localhost",
   mode: "local-proxy",
+  proxy: {
+    tls: "dev",
+    httpsPort: false,
+  },
   proxies: {
-    web: { range: [3000, 3999], strategy: "smaller", strict: true },
+    web: { range: [3000, 3099], strategy: "smaller" },
     api: {
-      range: [8000, 8999],
-      strategy: "larger",
-      switchables: ["/auth/callback/*"],
+      range: [4000, 4099],
+      strategy: "smaller",
+      switchables: ["/auth/callback/*", "/api/auth/callback/*"],
     },
-    db: { range: [6000, 6999], strategy: "deterministic" },
-    email: { range: [10_000, 10_999] },
-    storybook: true,
+    db: { range: [5000, 5099], strategy: "deterministic" },
+    email: true,
   },
   env: {
     APP_BASE_URL: "${web.url}",
     NEXT_PUBLIC_API_BASE_URL: "${api.url}",
     API_PUBLIC_URL: "${api.url}",
     BETTER_AUTH_URL: "${api.url}",
+    TRUSTED_ORIGINS: "${web.url}",
+    CORS_ORIGIN: "${web.url}",
     TURSO_DATABASE_URL: "${db.url}",
   },
 });
 ```
+
+With the example above, a worktree named `fix-login` gets URLs like:
+
+```txt
+https://web.fix-login.acme.localhost
+https://api.fix-login.acme.localhost
+https://db.fix-login.acme.localhost
+```
+
+On the origin default branch, Orchport omits the worktree segment, so the main branch can keep shorter URLs such as `https://web.acme.localhost`.
+
+### What to Put in `turbo.json`
+
+No special Turborepo task type is required. Keep long-running dev tasks persistent and uncached:
+
+```json
+{
+  "tasks": {
+    "dev": {
+      "cache": false,
+      "persistent": true
+    },
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**", ".next/**", "!.next/cache/**"]
+    }
+  }
+}
+```
+
+Orchport should wrap the command that starts those tasks; Turbo still owns task scheduling, filters, and logs.
+
+## Configuration
+
+Orchport searches upward from the current directory for one of:
+
+- `orchport.config.ts`
+- `orchport.yaml`
+- `orchport.json`
+
+### Root Options
+
+| Key         | Type                              | Default / behavior                                                                                                                                  |
+| ----------- | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sld`       | string                            | Second-level label for hosts, for example `*.myapp.localhost`. Defaults to the git repository root directory name, then the current directory name. |
+| `tld`       | string                            | Host suffix. Defaults to `.localhost`; leading `.` is optional.                                                                                     |
+| `worktree`  | string                            | Defaults to the current git worktree name.                                                                                                          |
+| `mode`      | `"local-port"` or `"local-proxy"` | `local-port` resolves ports only. `local-proxy` also starts or uses a reverse proxy and emits public URLs.                                          |
+| `portRange` | `[number, number]`                | Default range for automatic allocation and fallback: `[43100, 43999]`.                                                                              |
+| `proxy`     | object                            | Reverse proxy options for `local-proxy`. `tls` defaults to `"dev"` unless explicitly disabled.                                                      |
+| `proxies`   | object                            | Required service map. A key such as `web` produces `ORCHPORT_WEB_*` variables.                                                                      |
+| `env`       | object or function                | Extra environment values. Strings can interpolate `${web.url}`, `${api.port}`, and similar proxy values.                                            |
+
+YAML and JSON still accept the legacy key `workspace` as an alias for `sld`. If both are present and disagree, loading fails.
+
+### Proxy Entries
+
+Each `proxies` entry can be `true`, `{}`, or a full object.
+
+| Key           | Type                                          | Behavior                                                                                                                    |
+| ------------- | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `range`       | `"auto"` or `[number, number]`                | Port range for this service. `"auto"` uses the root `portRange`.                                                            |
+| `strategy`    | `"deterministic"`, `"smaller"`, or `"larger"` | Allocation order. `deterministic` hashes `sld`, `worktree`, and proxy name.                                                 |
+| `strict`      | boolean                                       | If `true`, fail when a fixed or ranged port cannot be used. If `false`, fall back to the root `portRange` when possible.    |
+| `switchables` | string[]                                      | Path patterns that can be routed to another worktree with `orchport switch`. Supports exact paths and trailing `/prefix/*`. |
+| `env`         | object                                        | Extra environment values for this proxy when using `orchport run <proxy> -- ...`.                                           |
+
+## Commands
+
+| Command                      | Purpose                                                                                                                                                           |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `orchport init`              | Create a starter config. Use `--format yaml`, `--format json`, or `--format ts`.                                                                                  |
+| `orchport doctor`            | Check config loading and state-directory read/write access.                                                                                                       |
+| `orchport env`               | Print resolved environment values without running a child process. TTY output is grouped by proxy; use `--json`, `--shell`, `--dotenv`, or `--plain` for scripts. |
+| `orchport run`               | Resolve config, allocate ports, optionally start the proxy, then run a child command.                                                                             |
+| `orchport run <proxy>`       | Run a child command with one proxy's flat environment, including `PORT`.                                                                                          |
+| `orchport list`              | Show recorded runs.                                                                                                                                               |
+| `orchport kill`              | Send a signal to processes recorded by prior runs.                                                                                                                |
+| `orchport switch <worktree>` | Point configured `switchables` paths at another worktree.                                                                                                         |
+| `orchport proxy up`          | Start a long-lived local proxy for `local-proxy` configs.                                                                                                         |
+| `orchport proxy down`        | Stop the recorded proxy daemon.                                                                                                                                   |
+| `orchport proxy status`      | Show proxy daemon status.                                                                                                                                         |
+
+Global options go before the subcommand:
+
+| Option              | Meaning                                                                        |
+| ------------------- | ------------------------------------------------------------------------------ |
+| `--config <path>`   | Use a specific config file.                                                    |
+| `--sld <name>`      | Override the host label.                                                       |
+| `--tld <suffix>`    | Override the host suffix.                                                      |
+| `--worktree <name>` | Override the worktree name.                                                    |
+| `--version`         | Print the Orchport version.                                                    |
+| `--verbose`, `-v`   | Enable trace-level diagnostics for `orchport.*` loggers.                       |
+| `--quiet`, `-q`     | Show warnings and errors only.                                                 |
+| `--no-color`        | Disable ANSI color.                                                            |
+| `--force-switch`    | Let `orchport run` claim switchable paths currently owned by another worktree. |
+| `--json`            | Print fatal CLI errors as JSON on stderr.                                      |
+
+## Environment Variables
+
+Orchport always injects `ORCHPORT=1` plus generated `ORCHPORT_*` values.
+
+Common generated variables include:
+
+| Variable                    | Meaning                                        |
+| --------------------------- | ---------------------------------------------- |
+| `ORCHPORT_SLD`              | Resolved host label.                           |
+| `ORCHPORT_TLD`              | Resolved host suffix.                          |
+| `ORCHPORT_WORKTREE`         | Resolved worktree slug.                        |
+| `ORCHPORT_RUN_ID`           | Current run identifier.                        |
+| `ORCHPORT_<NAME>_PORT`      | Allocated local port for a proxy.              |
+| `ORCHPORT_<NAME>_HOST`      | Public host for a proxy.                       |
+| `ORCHPORT_<NAME>_URL`       | Public URL for a proxy.                        |
+| `ORCHPORT_<NAME>_LOCAL_URL` | Direct `http://localhost:<port>` URL.          |
+| `ORCHPORT_PROXY_PORT`       | Main reverse proxy port in `local-proxy` mode. |
+| `ORCHPORT_HTTPS_PROXY_PORT` | Extra HTTPS listener port when one is active.  |
+
+`ORCHPORT`, `ORCHPORT_*`, and legacy lowercase `orchport` / `orchport_*` names are reserved. User config cannot override them.
+
+When `orchport run <proxy> -- ...` targets one proxy, Orchport also injects `PORT` for that service. That makes it easy to start frameworks that already read `PORT`.
+
+## Local Proxy and TLS
+
+In `mode: "local-proxy"`, Orchport can provide browser-facing URLs while your apps still listen on local ports.
+
+```ts
+export default defineConfig({
+  mode: "local-proxy",
+  proxy: { tls: "dev" },
+  proxies: { web: true, api: true },
+});
+```
+
+With `tls: "dev"`, Orchport generates an ephemeral self-signed certificate with `openssl`, writes it under the OS temp directory, and removes it when the child exits. Browsers may warn unless you trust the certificate.
+
+During `orchport run`, TLS configs also expose:
+
+- `ORCHPORT_DEV_TLS_CERT_FILE`
+- `NODE_EXTRA_CA_CERTS`, when the parent did not already set it
+- `DENO_CERT`, when the parent did not already set it
+
+This lets Node, Bun, and Deno clients trust Orchport's generated local HTTPS URLs. `orchport env` does not emit these paths because no runtime certificate exists until `run`.
+
+By default, TLS mode tries to bind an extra HTTPS listener on port `443` for nicer URLs. Set `proxy.httpsPort: false` to skip that and always use the high proxy port:
+
+```ts
+proxy: {
+  tls: "dev",
+  httpsPort: false
+}
+```
+
+If the extra listener cannot bind, Orchport keeps running on the main proxy port and rewrites generated public URLs accordingly.
+
+## Path Switching for OAuth Callbacks
+
+OAuth providers often allow only a small set of callback URLs. With multiple worktrees, registering one callback URL per branch is painful.
+
+`switchables` solves that by keeping the public callback URL stable while routing matching paths to another worktree's backend.
+
+```ts
+proxies: {
+  api: {
+    range: [4000, 4099],
+    switchables: ["/auth/callback/*"]
+  }
+}
+```
+
+Run the proxy and services as usual, then switch callback traffic:
+
+```bash
+orchport switch fix-login
+```
+
+Behavior:
+
+- Patterns are exact paths such as `/auth/callback` or trailing-prefix patterns such as `/auth/callback/*`.
+- `**` and middle `*` wildcards are rejected.
+- Ownership is stored in `switches.json` under the Orchport state directory.
+- `orchport run` claims configured switchable slots for the current worktree.
+- If another worktree owns a slot, `orchport run` fails unless `--force-switch` is set.
+- If the selected worktree has no matching run state, the proxy returns `502` for that switched path.
+
+## State Directory and Agent Sandboxes
+
+Orchport stores run records, switch ownership, and proxy daemon state under:
+
+```txt
+$XDG_STATE_HOME/orchport
+```
+
+If `XDG_STATE_HOME` is unset, the default is:
+
+```txt
+~/.local/state/orchport
+```
+
+Override it when needed:
+
+```bash
+ORCHPORT_STATE_DIR=/tmp/orchport-state orchport run -- turbo dev
+```
+
+Agent sandboxes such as Cursor, Codex, and Claude Code often restrict writes outside the workspace. If Orchport cannot write state, add the absolute state directory path to the agent's writable paths. `orchport doctor` prints the resolved path and verifies read/write access.
+
+## Port Allocation
+
+Orchport probes candidate ports by briefly listening on `127.0.0.1`.
+
+| Setting                     | Behavior                                                                                               |
+| --------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `strategy: "smaller"`       | Try from the range minimum upward.                                                                     |
+| `strategy: "larger"`        | Try from the range maximum downward.                                                                   |
+| `strategy: "deterministic"` | Hash `sld`, `worktree`, and proxy name to choose a stable starting point, then wrap through the range. |
+| `strict: true`              | Fail if the configured port or range is unavailable.                                                   |
+| `strict: false`             | Warn and fall back to the root `portRange` when possible.                                              |
+
+The default root range is `[43100, 43999]`.
+
+## Troubleshooting
+
+### `No free port in range ...`
+
+The configured range is exhausted or the sandbox cannot bind local sockets. Increase the range, stop stale dev servers, or run `orchport doctor` to check the environment.
+
+### `Requested port ... is not available`
+
+The entry is strict and the requested port is already in use. Free that port, change the range, or set `strict: false`.
+
+### Browser TLS warnings
+
+`proxy.tls: "dev"` uses an ephemeral self-signed certificate. Trust it locally if you want a warning-free browser session, or set `proxy.tls: false` for HTTP.
+
+### Node or Bun cannot fetch `https://*.localhost`
+
+Use `orchport run`, not only `orchport env`, so Orchport can create the certificate and inject `NODE_EXTRA_CA_CERTS`.
+
+### Nested runs skip resolution
+
+If `ORCHPORT=1` is already present, `orchport run` assumes it is inside another Orchport process and skips re-resolution. Use `--nested` or `--force-env` on `run` when you intentionally want a nested run.
+
+## Development
+
+This repository uses Bun:
+
+```bash
+bun install
+bun run lint
+bun run format:check
+bun run typecheck
+bun run test
+bun run build
+bun run build:compile
+./dist/orchport --version
+```
+
+Release notes and version bumps are managed with Changesets:
+
+```bash
+bun changeset
+bun run version-packages
+```
+
+Do not edit `CHANGELOG.md` directly; add a `.changeset/*.md` entry for release-facing changes.
